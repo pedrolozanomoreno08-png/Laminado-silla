@@ -132,7 +132,14 @@ def _trazar(consultor, P0, d0, h, n_max, regla, zona=None, darts=None, plano_n=N
     d = d0.copy()
     nodos = [P.copy()]
     if regla == "curva":
-        return _seguir_curva(consultor, P0, d0, h, n_max, curva)
+        nodos = _seguir_curva(consultor, P0, d0, h, n_max, curva)
+        if 2 <= len(nodos) <= n_max:
+            # más allá del final de la curva el hilo continúa por el camino más recto
+            dfin = nodos[-1] - nodos[-2]
+            resto = _trazar(consultor, nodos[-1], dfin / np.linalg.norm(dfin), h, n_max - len(nodos) + 1,
+                            "geodesica", zona=zona, darts=darts)
+            nodos = np.vstack([nodos, resto[1:]])
+        return nodos
     prev = P.copy()
     for _ in range(n_max * sub * 3):
         X = P + d * ds
@@ -278,6 +285,20 @@ def drapear_red(consultor: Consultor, semilla, direccion, h, estrategia="geodesi
     P0 = P0[0]
     n0 = n0[0]
     d0 = proyectar_tangente(np.asarray(direccion, float)[None], n0[None])[0]
+    if estrategia == "curva" and curva_semilla is not None and len(curva_semilla) >= 2:
+        # la curva de semilla define la urdimbre: su tangente en la semilla manda sobre la orientación
+        C = np.asarray(curva_semilla, float)
+        # la semilla debe estar sobre la curva: se lleva al punto más cercano de la curva
+        L = np.r_[0, np.cumsum(np.linalg.norm(np.diff(C, axis=0), axis=1))]
+        dens = np.linspace(0, L[-1], max(2, int(L[-1] / (h / 20)) + 1))
+        D = np.stack([np.interp(dens, L, C[:, q]) for q in range(3)], 1)
+        Pq, nq, _, _ = consultor.proyectar(D[[int(np.argmin(np.linalg.norm(D - P0, axis=1)))]])
+        P0, n0 = Pq[0], nq[0]
+        d0 = proyectar_tangente(np.asarray(direccion, float)[None], n0[None])[0]
+        k = int(np.argmin(np.linalg.norm(C - P0, axis=1)))
+        t = C[min(k + 1, len(C) - 1)] - C[max(k - 1, 0)]
+        t = proyectar_tangente(t[None], n0[None])[0]
+        d0 = t if t @ d0 >= 0 else -t
     d1 = np.cross(n0, d0)
     N = int(np.ceil((radio if radio else 1000.0) / h)) + 2
     N = min(N, tam_max)
@@ -289,7 +310,7 @@ def drapear_red(consultor: Consultor, semilla, direccion, h, estrategia="geodesi
     G[i0, j0] = P0
     ok[i0, j0] = True
     dz = _Darts(darts or [], h, consultor)
-    if estrategia == "energia":
+    if estrategia == "energia" or (estrategia == "curva" and (curva_semilla is None or len(curva_semilla) < 2)):
         estrategia = "geodesica"
     regla = estrategia
     for eje, d in ((0, d0), (1, d1)):

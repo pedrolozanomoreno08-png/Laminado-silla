@@ -1,0 +1,51 @@
+name: Pruebas y ejecutable
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencias
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgl1 libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
+          pip install numpy scipy pyvista vtk matplotlib shapely ezdxf reportlab xlsxwriter pytest
+      - name: Pruebas
+        run: python -m pytest -q
+
+  windows:
+    needs: pruebas
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: Ejecutable
+        run: pyinstaller --noconfirm laminado_studio.spec
+      - name: Comprobar que arranca la parte de cálculo
+        run: python -c "import laminado.modelo.proyecto, laminado.salidas.todo; print('ok')"
+      - name: Empaquetar
+        run: Compress-Archive -Path dist/LaminadoStudio/* -DestinationPath LaminadoStudio-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaminadoStudio-windows
+          path: LaminadoStudio-windows.zip
+      - name: Publicar versión
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LaminadoStudio-windows.zip

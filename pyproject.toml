@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laminado-studio"
+version = "1.0.0"
+description = "Diseño y fabricación de laminados de composite: drapeado, producibilidad, darts, empalmes, patrones planos y ply book"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "PySide6", "pyvista", "pyvistaqt", "vtk", "matplotlib", "shapely",
+                "ezdxf", "reportlab", "xlsxwriter"]
+
+[project.optional-dependencies]
+cad = ["gmsh"]
+rst = ["ansys-mapdl-reader"]
+dev = ["pytest", "pyinstaller"]
+
+[project.gui-scripts]
+laminado-studio = "laminado.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["laminado*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -16,7 +16,7 @@ from ..drapeado.simular import Empalme
 from ..geom.consulta import Consultor
 from ..modelo.proyecto import Capa, Contorno, Nucleo, Proyecto, Roseta, Secuencia
 from ..modelo.materiales import Material
-from . import propiedades as P
+from . import propiedades as props
 from .vista3d import Vista3D
 
 FILTRO_MOLDE = ("Geometría (*.wbpz *.dat *.cdb *.inp *.rst *.step *.stp *.iges *.igs *.stl *.obj *.ply *.vtk *.vtp);;"
@@ -319,20 +319,20 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
         w = None
         try:
             if tipo == "material":
-                w = P.PanelMaterial(self.p.materiales[clave])
+                w = props.PanelMaterial(self.p.materiales[clave])
             elif tipo == "roseta":
-                w = P.PanelRoseta(self.p.rosetas[clave])
+                w = props.PanelRoseta(self.p.rosetas[clave])
                 w.picar.connect(self._empezar_picado)
             elif tipo == "secuencia":
-                w = P.PanelSecuencia(self.p.secuencias[clave], self.p)
+                w = props.PanelSecuencia(self.p.secuencias[clave], self.p)
             elif tipo == "capa":
-                w = P.PanelCapa(self.p.capa(clave), self.p)
+                w = props.PanelCapa(self.p.capa(clave), self.p)
                 w.picar.connect(self._empezar_picado)
                 w.simular.connect(self.simular_sel)
             elif tipo == "nucleo":
-                w = P.PanelNucleo(self.p.nucleos[clave], self.p)
+                w = props.PanelNucleo(self.p.nucleos[clave], self.p)
             elif tipo in ("proyecto", "molde", None):
-                w = P.PanelProyecto(self.p)
+                w = props.PanelProyecto(self.p)
         except KeyError:
             w = None
         if w is None:
@@ -595,7 +595,7 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
         if modo == "semilla":
             capa.semilla = tuple(float(x) for x in P)
             self.cancelar_picado()
-            if isinstance(self.panel, P.PanelCapa):
+            if isinstance(self.panel, props.PanelCapa):
                 self.panel.refrescar()
             if self.a_live.isChecked():
                 self.simular_sel()

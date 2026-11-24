@@ -76,9 +76,11 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
     P0 = consultor_molde.proyectar(np.asarray(semilla, float)[None])[0][0]
     radio = float(np.linalg.norm(m.V - P0, axis=1).max()) * 1.25 + 3 * h
     zc = Consultor(malla_capa)
+    # margen de la zona de interés: la red necesita nodos fuera de la capa para llegar a las esquinas
+    margen_zona = max(3 * h, 0.2 * float(np.linalg.norm(np.ptp(malla_capa.V, axis=0))))
 
     def zona(P):
-        return zc.mas_cercano(P)[3] < 2.5 * h
+        return zc.mas_cercano(P)[3] < margen_zona
 
     estr = opciones.estrategia
     # con relajación, la red se calcula continua (sin rendijas) y la energía abre los darts
