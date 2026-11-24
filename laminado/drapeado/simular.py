@@ -76,7 +76,9 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
     P0 = consultor_molde.proyectar(np.asarray(semilla, float)[None])[0][0]
     radio = float(np.linalg.norm(m.V - P0, axis=1).max()) * 1.25 + 3 * h
     zc = Consultor(malla_capa)
-    # margen de la zona de interés: la red necesita nodos fuera de la capa para llegar a las esquinas
+    # margen de la zona de interés: la red necesita nodos fuera de la capa para llegar a las
+    # esquinas y, en tubos con el hilo en hélice, para avanzar a lo largo del tubo (los solapes
+    # de vueltas sucesivas los resuelve la asignación por continuidad de mapear_red)
     margen_zona = max(3 * h, 0.2 * float(np.linalg.norm(np.ptp(malla_capa.V, axis=0))))
 
     def zona(P):

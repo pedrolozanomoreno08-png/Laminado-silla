@@ -1,0 +1,35 @@
+CUADRO DE BICICLETA DE CARRETERA (talla ~54) – EJEMPLO PARA LAMINADO STUDIO
+==========================================================================
+
+Archivos
+  cuadro_bicicleta.lam      Proyecto listo: 11 capas de la concha izquierda del molde.
+  cuadro_bicicleta.wbpz     El cuadro como proyecto de Ansys Workbench (ds.dat con zonas con nombre).
+  cuadro_bicicleta_ds.dat   El mismo modelo como entrada de Mechanical.
+  cuadro_bicicleta.stl      El mismo modelo como malla STL (sin zonas).
+
+Geometría: superficie exterior del cuadro (unos 77 000 triángulos), unida suavemente en los nudos.
+Ejes: X hacia delante, Y a la izquierda, Z hacia arriba; origen en el pedalier; mm.
+
+Zonas con nombre (aparecen en el árbol bajo «Molde»)
+  TUBO_xxx_IZQ / _DER        media caña del tramo recto de cada tubo (molde de dos conchas)
+  VAINA_/TIRANTE_xxx_EXTERIOR / _INTERIOR   media caña hacia fuera / hacia dentro
+  NUDO_PEDALIER / NUDO_DIRECCION / NUDO_SILLIN _IZQ/_DER   refuerzos de las uniones
+  MITAD_IZQ / MITAD_DER      cada concha completa
+  TUBO_xxx, CAJA_PEDALIER    cada tubo entero
+
+Qué verás al simular (Mayús+F5)
+  - Tubos diagonal, superior, sillín y dirección: VERDE.
+  - Diagonal con unidireccional a ±45° (secuencia con escalonado de 5 mm): VERDE.
+  - Vaina y tirante: VERDE con la estrategia «Mínima energía» (en tubos tan finos la red geodésica
+    acumula cizalla).
+  - Nudos (pedalier, dirección, sillín): ROJO aunque se añadan darts automáticos. Es lo esperable:
+    en la unión de varios tubos una sola pieza de tejido no puede adaptarse. En fabricación se
+    dividen en varias piezas pequeñas; prueba a crear capas sobre zonas más pequeñas o a añadir
+    empalmes y compara.
+
+Prueba sugerida
+  1. Archivo › Abrir proyecto… › cuadro_bicicleta.lam
+  2. Capa P001 › F5. Cambia la orientación a 45° (con «Interactivo» activado) y mira cómo cambia.
+  3. Capa P009 (nudo del pedalier) › F5: verás los darts automáticos (líneas rosas) y las zonas rojas.
+  4. Color › «Ángulo de fibra» para ver cómo gira la fibra a lo largo de los tubos.
+  5. Salidas › Todas las salidas… para obtener los patrones de corte de cada pieza.

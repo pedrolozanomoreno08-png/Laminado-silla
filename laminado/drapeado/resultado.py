@@ -55,25 +55,10 @@ def mapear_red(red: Red, malla: TriMesh):
     ci, cj = np.nonzero(co)
     if len(ci) == 0:
         raise RuntimeError("La red de drapeado está vacía: revisa la semilla y la dirección")
-    centros = 0.25 * (G[ci, cj] + G[ci + 1, cj] + G[ci, cj + 1] + G[ci + 1, cj + 1])
-    arbol = cKDTree(centros)
     X = malla.face_centroids
-    k = min(8, len(ci))
-    _, cand = arbol.query(X, k=k)
-    cand = cand.reshape(len(X), -1)
-    mejor = np.full(len(X), -1)
-    mejor_r = np.full(len(X), np.inf)
-    mejor_st = np.zeros((len(X), 2))
-    for c in range(cand.shape[1]):
-        q = cand[:, c]
-        a, b = ci[q], cj[q]
-        s, t, r = invertir_bilineal(G[a, b], G[a + 1, b], G[a, b + 1], G[a + 1, b + 1], X)
-        fuera = np.maximum.reduce([-s, s - 1, -t, t - 1, np.zeros_like(s)])
-        pen = r + fuera * h * 2
-        mej = pen < mejor_r
-        mejor[mej] = q[mej]
-        mejor_r[mej] = pen[mej]
-        mejor_st[mej] = np.c_[s, t][mej]
+    mejor, mejor_r = _asignar_por_indices(red, malla)
+    filas = np.arange(len(X))
+    a_m, b_m = mejor[:, 0], mejor[:, 1]
     cubierta = mejor_r < 0.25 * h
     # vértices: en la celda de cada cara incidente
     F = malla.F
@@ -81,8 +66,7 @@ def mapear_red(red: Red, malla: TriMesh):
     w_acc = np.zeros(malla.nv)
     for kk in range(3):
         v = F[:, kk]
-        q = mejor
-        a, b = ci[q], cj[q]
+        a, b = a_m, b_m
         s, t, r = invertir_bilineal(G[a, b], G[a + 1, b], G[a, b + 1], G[a + 1, b + 1], malla.V[v])
         u = (a - red.i0 + s) * h
         w = (b - red.j0 + t) * h
@@ -94,6 +78,90 @@ def mapear_red(red: Red, malla: TriMesh):
     if not cubierto.all() and cubierto.any():
         uv = _rellenar_laplaciano(malla, uv, cubierto)
     return uv, cubierto, cubierta
+
+
+def _asignar_por_indices(red: Red, malla: TriMesh, radio=None):
+    """Celda (i, j) de la red para cada cara, siguiendo la continuidad del tejido.
+
+    Recorre las caras en anchura desde la cara de la semilla; cada cara busca su celda sólo
+    entre las vecinas (±radio en índices) de la celda de su cara padre. Así, en superficies
+    cerradas donde la red da varias vueltas y se solapa, cada cara se queda en la misma
+    «vuelta» que sus vecinas. Devuelve (celda (nf,2), penalización (nf,))."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import breadth_first_order
+    h = red.h
+    G = red.G
+    co = red.celda_ok
+    ni, nj = co.shape
+    X = malla.face_centroids
+    nf = malla.nf
+    if radio is None:
+        # entre caras vecinas el salto en celdas es ~ tamaño de cara / h
+        radio = int(np.clip(np.ceil(1.5 * float(np.percentile(malla.edge_lengths, 90)) / h) + 1, 2, 12))
+    ef = malla.edge_faces
+    ok = ef[:, 1] >= 0
+    A = coo_matrix((np.ones(ok.sum()), (ef[ok, 0], ef[ok, 1])), shape=(nf, nf)).tocsr()
+    A = A + A.T
+    celda = np.full((nf, 2), -1, np.int64)
+    pen = np.full(nf, np.inf)
+    off = np.arange(-radio, radio + 1)
+    di, dj = [x.ravel() for x in np.meshgrid(off, off, indexing="ij")]
+
+    def evaluar(caras, base):
+        """Mejor celda entre las vecinas de ``base`` (k,2) para las caras dadas."""
+        I = np.clip(base[:, :1] + di[None], 0, ni - 1)
+        J = np.clip(base[:, 1:] + dj[None], 0, nj - 1)
+        valida = co[I, J]
+        P = np.repeat(X[caras], I.shape[1], axis=0)
+        Ir, Jr = I.ravel(), J.ravel()
+        s_, t_, r = invertir_bilineal(G[Ir, Jr], G[Ir + 1, Jr], G[Ir, Jr + 1], G[Ir + 1, Jr + 1], P)
+        fuera = np.maximum.reduce([-s_, s_ - 1, -t_, t_ - 1, np.zeros_like(s_)])
+        p_ = (r + fuera * h * 2).reshape(I.shape)
+        p_ = np.where(valida, p_, np.inf)
+        k = np.argmin(p_, axis=1)
+        fil = np.arange(len(caras))
+        return np.c_[I[fil, k], J[fil, k]], p_[fil, k]
+
+    sin_asignar = np.ones(nf, bool)
+    # puede haber varias componentes (no debería): se arranca desde la cara más cercana a la
+    # semilla en cada una
+    P0 = G[red.i0, red.j0]
+    while sin_asignar.any():
+        cand = np.nonzero(sin_asignar)[0]
+        f0 = int(cand[np.argmin(np.linalg.norm(X[cand] - P0, axis=1))])
+        orden, pred = breadth_first_order(A, f0, directed=False, return_predecessors=True)
+        # semilla: búsqueda más amplia alrededor de (i0, j0)
+        base0 = np.array([[red.i0 - 1, red.j0 - 1]])
+        c0, p0 = evaluar(np.array([f0]), base0)
+        if not np.isfinite(p0[0]) or p0[0] > 0.25 * h:
+            # la cara de la semilla no está en la red: celda válida más cercana en el espacio
+            ii, jj = np.nonzero(co)
+            cen = 0.25 * (G[ii, jj] + G[ii + 1, jj] + G[ii, jj + 1] + G[ii + 1, jj + 1])
+            k = int(np.argmin(np.linalg.norm(cen - X[f0], axis=1)))
+            c0, p0 = evaluar(np.array([f0]), np.array([[ii[k], jj[k]]]))
+        celda[f0] = c0[0]
+        pen[f0] = p0[0]
+        sin_asignar[f0] = False
+        # niveles de la búsqueda en anchura
+        nivel = np.zeros(nf, np.int64)
+        for f in orden[1:]:
+            nivel[f] = nivel[pred[f]] + 1
+        resto = orden[1:]
+        if len(resto):
+            niv = nivel[resto]
+            for L in range(1, int(niv.max()) + 1):
+                caras = resto[niv == L]
+                padres = pred[caras]
+                base = celda[padres]
+                c, p_ = evaluar(caras, base)
+                # si no hay celda válida se hereda la del padre (zona no alcanzada)
+                malo = ~np.isfinite(p_)
+                c[malo] = base[malo]
+                celda[caras] = c
+                pen[caras] = np.where(malo, np.inf, p_)
+        sin_asignar[orden] = False
+    pen = np.where(np.isfinite(pen), pen, 1e9)
+    return celda, pen
 
 
 def _rellenar_laplaciano(malla, valores, conocido):

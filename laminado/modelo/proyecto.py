@@ -200,9 +200,13 @@ class Proyecto:
     def semilla_de(self, capa: Capa, neto: TriMesh):
         if capa.semilla is not None:
             return np.asarray(capa.semilla, float)
-        # punto de la región más alejado del borde (centro geodésico)
+        # centro de la capa: entre los puntos bien alejados del borde, el más próximo al
+        # centroide de área (en piezas alargadas, como medias cañas, queda a mitad de largo)
         d = fast_marching(neto, neto.boundary_vertices_mask)
-        return neto.V[int(np.argmax(d))]
+        d = np.where(np.isfinite(d), d, 0.0)
+        cand = np.nonzero(d >= 0.7 * d.max())[0]
+        cg = (neto.face_centroids * neto.face_areas[:, None]).sum(0) / neto.area
+        return neto.V[cand[int(np.argmin(np.linalg.norm(neto.V[cand] - cg, axis=1)))]]
 
     # ---------------------------------------------------------------- regiones
     def _phi_contorno(self, contorno: Contorno, ext: TriMesh):
@@ -292,6 +296,11 @@ class Proyecto:
         ros = self.rosetas.get(capa.roseta) or next(iter(self.rosetas.values()))
         direccion = ros.direccion(semilla[None], n0, capa.orientacion)[0]
         op = self.opciones(capa)
+        if not capa.h:
+            # celda adaptada a la curvatura: como mucho ~1/3 del radio de curvatura mínimo
+            # (percentil 95) para que la red siga fielmente tubos finos y radios pequeños
+            # (no por debajo de ~0.4 del tamaño de elemento: la malla no resuelve más detalle)
+            op.h = min(op.h, max(1.0, 0.4 * float(np.median(neto.edge_lengths)), 0.3 / _curvatura_p95(neto)))
         darts = [Dart(np.asarray(p, float), f"Dart {k + 1}") for k, p in enumerate(capa.darts)]
         if capa.darts_auto:
             res = simular_con_darts_auto(malla_c, cons, semilla, direccion, op,
@@ -445,6 +454,20 @@ class Proyecto:
         p.nucleos = [Nucleo(**{**n, "contorno": Contorno(**n["contorno"])}) for n in d.get("nucleos", [])]
         p.ruta = ruta
         return p
+
+
+def _curvatura_p95(m: TriMesh) -> float:
+    """Curvatura normal aproximada (1/mm) por arista, percentil 95."""
+    E = m.edges
+    n = m.vertex_normals
+    interior = ~m.boundary_vertices_mask[E].any(1)        # las normales del borde son menos fiables
+    largas = m.edge_lengths > 0.3 * np.median(m.edge_lengths)   # aristas diminutas de los cortes
+    sel = interior & largas
+    if not sel.any():
+        return 1e-6
+    ang = np.arccos(np.clip((n[E[sel, 0]] * n[E[sel, 1]]).sum(1), -1, 1))
+    k = ang / np.maximum(m.edge_lengths[sel], 1e-9)
+    return float(max(np.percentile(k, 95), 1e-6))
 
 
 def _por_cara(ref, caras, nf):

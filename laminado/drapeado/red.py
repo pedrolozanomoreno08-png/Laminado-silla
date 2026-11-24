@@ -321,7 +321,7 @@ def drapear_red(consultor: Consultor, semilla, direccion, h, estrategia="geodesi
                 r = "geodesica"
             else:
                 r = regla
-            nodos = _trazar(consultor, P0, sg * d, h, N, r, zona=zona, darts=dz, plano_n=pn,
+            nodos = _trazar(consultor, P0, sg * d, h, N, r, zona=None, darts=dz, plano_n=pn,
                             curva=curva_semilla, dir_fija=sg * d)
             for k, X in enumerate(nodos[1:N + 1], start=1):
                 if eje == 0:
@@ -368,8 +368,9 @@ def drapear_red(consultor: Consultor, semilla, direccion, h, estrategia="geodesi
             cang = (a * b).sum(1) / np.maximum(np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1), 1e-300)
             orient = (np.cross(A - C, B - C) * n).sum(1) * (si * sj)
             # la celda debe conservar la orientación de la red (sin pliegues)
-            o0 = (np.cross(d0, d1) * n).sum(1)
-            bien = conv & ~fuera & (np.abs(cang) < cos_lim) & (orient * o0 * ref > 0)
+            # orientación respecto a la normal local (no a la de la semilla: en tubos o faldones
+            # la superficie gira más de 90° y la normal de la semilla ya no sirve de referencia)
+            bien = conv & ~fuera & (np.abs(cang) < cos_lim) & (orient * ref > 0)
             bien &= ((X - C) * (A + B - 2 * C)).sum(1) > 0
             if zona is not None:
                 bien &= zona(X)
