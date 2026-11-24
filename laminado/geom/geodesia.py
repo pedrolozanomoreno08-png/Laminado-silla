@@ -36,7 +36,15 @@ class DistanciaGeodesica:
         t = t_factor * h * h
         L = m.laplaciano_cot
         M = m.masa
-        self._calor = spla.factorized((M - t * L).tocsc())
+        A = (M - t * L).tocsc()
+        self._calor = spla.factorized(A)
+        # condición de Dirichlet en el borde (se promedia con Neumann: mejor cerca del borde)
+        self._borde = m.boundary_vertices_mask
+        self._calor_d = None
+        if self._borde.any():
+            libre = ~self._borde
+            self._libre = np.nonzero(libre)[0]
+            self._calor_d = spla.factorized(A[self._libre][:, self._libre].tocsc())
         # Poisson con un ancla mediante regularización mínima
         self._poisson = spla.factorized((-L + 1e-10 * M).tocsc())
         self._G = _gradiente(m)
@@ -51,10 +59,14 @@ class DistanciaGeodesica:
         else:
             u0[fuentes] = 1.0
         u = self._calor(u0)
+        if self._calor_d is not None:
+            ud = np.zeros_like(u)
+            ud[self._libre] = self._calor_d(u0[self._libre])
+            u = 0.5 * (u + ud)
         g = (self._G @ u).reshape(-1, 3)
         X = -g / np.maximum(np.linalg.norm(g, axis=1, keepdims=True), 1e-300)
         div = self._Ga @ X.ravel()
-        phi = self._poisson(-div)
+        phi = self._poisson(div)
         idx = np.nonzero(u0)[0]
         phi -= phi[idx].mean()
         return phi
@@ -131,3 +143,109 @@ def trazar_geodesica(consultor, P0, d0, longitud, paso, max_pasos=100000, tol_bo
             if len(pts) * paso >= longitud:
                 break
     return np.array(pts)
+
+
+def fast_marching(m: TriMesh, fuentes, valores=None, limite: float = np.inf) -> np.ndarray:
+    """Distancia geodésica por fast marching sobre triángulos (Kimmel–Sethian).
+
+    Exacta para frentes planos (p.ej. distancia a un borde recto) y de primer orden en general.
+    ``fuentes``: índices de vértice (o máscara); ``valores``: distancia inicial de cada fuente.
+    ``limite``: detiene la propagación más allá de esa distancia (más rápido para desfases)."""
+    import heapq
+    V = m.V
+    fuentes = np.asarray(fuentes)
+    if fuentes.dtype == bool:
+        fuentes = np.nonzero(fuentes)[0]
+    T = np.full(m.nv, np.inf)
+    T[fuentes] = 0.0 if valores is None else np.asarray(valores, float)
+    estado = np.zeros(m.nv, np.int8)       # 0 lejano, 1 frente, 2 fijo
+    vc = m.vertice_caras.tocsr()
+    ptr, ind = vc.indptr, vc.indices
+    F = m.F
+    heap = [(T[i], int(i)) for i in fuentes]
+    heapq.heapify(heap)
+    estado[fuentes] = 1
+    # una fuente aislada (punto): inicializa su primer anillo con la distancia euclídea exacta
+    if valores is None and len(fuentes) <= 3:
+        for s in fuentes:
+            for f in ind[ptr[s]:ptr[s + 1]]:
+                for v in F[f]:
+                    d = float(np.linalg.norm(V[v] - V[s]))
+                    if d < T[v]:
+                        T[v] = d
+                        estado[v] = 1
+                        heapq.heappush(heap, (d, int(v)))
+
+    def actualizar(c, a, b):
+        ta, tb = T[a], T[b]
+        if not np.isfinite(ta) and not np.isfinite(tb):
+            return np.inf
+        if not np.isfinite(ta):
+            return tb + np.linalg.norm(V[c] - V[b])
+        if not np.isfinite(tb):
+            return ta + np.linalg.norm(V[c] - V[a])
+        A, B, C = V[a], V[b], V[c]
+        ab = B - A
+        L = np.linalg.norm(ab)
+        e1 = ab / L
+        ac = C - A
+        cx = ac @ e1
+        cy = np.linalg.norm(ac - cx * e1)
+        dt = tb - ta
+        cand = min(ta + np.linalg.norm(ac), tb + np.linalg.norm(C - B))
+        if abs(dt) < L and cy > 1e-12:
+            gx = dt / L
+            gy = np.sqrt(1 - gx * gx)
+            tc = ta + gx * cx + gy * cy
+            # el rayo característico que llega a C debe cruzar el segmento AB
+            lam = cy / gy
+            px = cx - lam * gx
+            if 0 <= px <= L:
+                cand = min(cand, tc)
+        return cand
+
+    while heap:
+        t, i = heapq.heappop(heap)
+        if estado[i] == 2 or t > T[i]:
+            continue
+        estado[i] = 2
+        if t > limite:
+            break
+        for f in ind[ptr[i]:ptr[i + 1]]:
+            tri = F[f]
+            for c in tri:
+                if estado[c] == 2:
+                    continue
+                a, b = [x for x in tri if x != c]
+                if estado[a] != 2 and estado[b] != 2:
+                    continue
+                ta_ok = estado[a] == 2
+                tb_ok = estado[b] == 2
+                if ta_ok and tb_ok:
+                    tn = actualizar(c, a, b)
+                else:
+                    k = a if ta_ok else b
+                    tn = T[k] + np.linalg.norm(V[c] - V[k])
+                if tn < T[c]:
+                    T[c] = tn
+                    estado[c] = 1
+                    heapq.heappush(heap, (tn, int(c)))
+    return T
+
+
+def distancia_a_borde_region(m: TriMesh, mascara_caras, limite=np.inf):
+    """Distancia con signo al contorno de una región de caras (negativa dentro).
+
+    El contorno debe coincidir con aristas de la malla (p.ej. tras ``cortar_por_nivel``)."""
+    F = m.F
+    dentro_v = np.zeros(m.nv, bool)
+    fuera_v = np.zeros(m.nv, bool)
+    dentro_v[F[mascara_caras].ravel()] = True
+    fuera_v[F[~mascara_caras].ravel()] = True
+    contorno = dentro_v & fuera_v
+    sub_borde = np.zeros(m.nv, bool)
+    # el borde libre de la región que coincide con el borde de la malla no es contorno de desfase
+    d = fast_marching(m, contorno, limite=limite) if contorno.any() else np.full(m.nv, np.inf)
+    del sub_borde
+    signo = np.where(dentro_v & ~fuera_v, -1.0, 1.0)
+    return signo * d
