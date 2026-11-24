@@ -1,0 +1,54 @@
+LAMINADO STUDIO – GUÍA DE PRUEBA (unos 15 minutos)
+==================================================
+
+Archivos de esta carpeta
+  silla_casco.wbpz      Casco de silla como proyecto de Ansys Workbench (dentro lleva ds.dat
+                        con 5 Named Selections: ASIENTO, POMO, BORREN, FALDON_IZQ, FALDON_DER).
+  silla_casco_ds.dat    El mismo modelo como entrada de Mechanical (ds.dat).
+  silla_casco.stl       El mismo modelo como malla STL (sin selecciones).
+  cupula_R150.stl       Cúpula esférica de radio 150 mm: doble curvatura, ideal para ver darts.
+  silla_de_prueba.lam   Proyecto ya montado: 8 capas, secuencia con escalonado, darts automáticos.
+
+PRUEBA 1 – Abrir un proyecto y simular (producibilidad)
+  1. Archivo › Abrir proyecto… › silla_de_prueba.lam
+  2. En el árbol, pulsa la capa P003 y luego F5. La capa se colorea:
+     verde = bien, amarillo = cizalla de aviso, rojo = por encima del límite.
+  3. Mira el panel «Producibilidad» (abajo a la derecha): cizalla máxima, áreas, peso.
+  4. Pestaña «Patrón plano»: la pieza de corte (línea negra) y el contorno neto (discontinua).
+
+PRUEBA 2 – Producibilidad interactiva
+  1. Con P003 seleccionada y «Interactivo» marcado en la barra, cambia la Orientación a 45°.
+     Se vuelve a drapear solo y cambian los colores y el patrón.
+  2. Cambia la «Estrategia de drapeado» (geodésica, plano, proyección, mínima energía) y compara.
+  3. Punto semilla › «Picar» › clic DERECHO sobre otra zona del molde. Se resimula desde ahí.
+
+PRUEBA 3 – Darts
+  1. Selecciona P001 (tiene «Darts automáticos» activado) y pulsa F5 (tarda unos 30 s).
+     Aparecen líneas rosas (darts); en el patrón plano se ven las muescas en V.
+  2. Darts a mano: Archivo › Importar molde… › cupula_R150.stl. En la capa P001, pulsa
+     «Añadir dart», haz clic DERECHO desde el borde hacia el centro (2-3 puntos) y pulsa Intro.
+     Compara la cizalla máxima con y sin el dart.
+
+PRUEBA 4 – Empalmes
+  1. En el árbol, abre «Materiales» y pon el «Ancho de rollo» del carbono en 300 mm.
+  2. Vuelve a P001 y pulsa F5: la capa se divide en varias piezas con solape (líneas moradas)
+     y el patrón plano muestra cada pieza por separado.
+
+PRUEBA 5 – Core sample
+  1. Simula todas las capas (Mayús+F5).
+  2. Pulsa «Core sample» en la barra y haz clic DERECHO en el centro del asiento.
+     La pestaña «Core sample» lista las capas de ese punto con su ángulo real y las
+     propiedades del laminado (Ex, Ey, Gxy).
+  3. En la barra, «Color: Espesores» muestra el mapa de espesores.
+
+PRUEBA 6 – Importar desde Ansys
+  1. Archivo › Nuevo proyecto. Archivo › Importar molde… › silla_casco.wbpz
+  2. En el árbol, bajo «Molde», salen las 5 selecciones. Clic derecho sobre ASIENTO ›
+     «Crear capa sobre esta selección» y F5.
+
+PRUEBA 7 – Salidas de fabricación
+  1. Salidas › Todas las salidas… y elige una carpeta vacía.
+  2. Revisa lo generado: patrones DXF (ábrelos en cualquier visor DXF), anidado.dxf,
+     laser.dxf/laser.csv, plybook_….pdf, laminado_….xlsx y la carpeta «ansys».
+
+Si algo falla o se ve raro, haz una captura de pantalla y envíamela.
