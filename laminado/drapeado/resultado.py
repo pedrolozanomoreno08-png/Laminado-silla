@@ -189,16 +189,20 @@ class ResultadoDrapeado:
         u2 = uv[F[:, 2]] - uv[F[:, 0]]
         return float(0.5 * np.abs(u1[:, 0] * u2[:, 1] - u1[:, 1] * u2[:, 0]).sum())
 
-    def resumen(self, aviso=None, limite=None):
+    def resumen(self, aviso=None, limite=None, mascara=None):
+        """Estadísticas de producibilidad (sobre las caras de ``mascara`` si se da, p.ej. el neto)."""
         g = np.abs(self.cizalla())
         A = self.malla.face_areas
+        cub = self.cara_cubierta()
+        if mascara is not None and np.any(mascara):
+            g, A, cub = g[mascara], A[mascara], cub[mascara]
         out = {
             "estrategia": self.estrategia,
             "cizalla_max": float(np.nanmax(g)) if len(g) else 0.0,
             "cizalla_media": float(np.average(g, weights=A)) if len(g) else 0.0,
             "area_superficie_mm2": float(A.sum()),
             "area_plana_mm2": self.area_plana(),
-            "cubierto_%": float(100 * A[self.cara_cubierta()].sum() / max(A.sum(), 1e-300)),
+            "cubierto_%": float(100 * A[cub].sum() / max(A.sum(), 1e-300)),
             "n_darts": len(self.darts),
         }
         if aviso is not None:

@@ -102,6 +102,8 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         uv, inf = drapear_energia(m, uv, sv, d0, max_iter=opciones.max_iter_energia, **kw)
         uv -= uv[sv]
         info.update(inf)
+        # la solución por energía cubre toda la capa (la producibilidad la da la cizalla)
+        cubierto = np.ones(m.nv, bool)
     elif not cubierto.all():
         # zonas que la red no alcanza (bloqueo del tejido): se completan por energía con la
         # zona alcanzada fija, para que el patrón plano sea continuo

@@ -322,7 +322,8 @@ class Proyecto:
     def _resumen(self, capa, rc: ResultadoCapa):
         mat = self.materiales[capa.material]
         r = rc.drapeado
-        s = r.resumen(mat.cizalla_aviso, mat.cizalla_limite)
+        neto = rc.phi_neto[r.malla.F].mean(1) <= 1e-9
+        s = r.resumen(mat.cizalla_aviso, mat.cizalla_limite, neto)
         neto_area = rc.neto.area
         area_corte = sum(p.area_plana() for p in rc.piezas)
         s.update({
