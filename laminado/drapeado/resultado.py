@@ -22,6 +22,11 @@ def invertir_bilineal(P00, P10, P01, P11, X, iters=8):
     """(s, t, residuo) tales que el parche bilineal pasa lo más cerca posible de X."""
     s = np.full(len(X), 0.5)
     t = np.full(len(X), 0.5)
+    with np.errstate(all="ignore"):
+        return _invertir(P00, P10, P01, P11, X, s, t, iters)
+
+
+def _invertir(P00, P10, P01, P11, X, s, t, iters):
     for _ in range(iters):
         B = _bilineal(P00, P10, P01, P11, s, t)
         r = B - X
@@ -36,9 +41,10 @@ def invertir_bilineal(P00, P10, P01, P11, X, iters=8):
         det = np.where(np.abs(det) < 1e-300, 1e-300, det)
         ds = (c * g1 - b * g2) / det
         dt = (a * g2 - b * g1) / det
-        s = s - ds
-        t = t - dt
+        s = np.clip(s - ds, -3, 4)
+        t = np.clip(t - dt, -3, 4)
     res = np.linalg.norm(_bilineal(P00, P10, P01, P11, s, t) - X, axis=1)
+    res = np.where(np.isfinite(res), res, np.inf)
     return s, t, res
 
 
@@ -59,7 +65,8 @@ def mapear_red(red: Red, malla: TriMesh):
     mejor, mejor_r = _asignar_por_indices(red, malla)
     filas = np.arange(len(X))
     a_m, b_m = mejor[:, 0], mejor[:, 1]
-    cubierta = mejor_r < 0.25 * h
+    # tolerancia de media celda: una celda doblada sobre una arista viva no es plana
+    cubierta = mejor_r < 0.5 * h
     # vértices: en la celda de cada cara incidente
     F = malla.F
     uv_acc = np.zeros((malla.nv, 2))
@@ -133,7 +140,7 @@ def _asignar_por_indices(red: Red, malla: TriMesh, radio=None):
         # semilla: búsqueda más amplia alrededor de (i0, j0)
         base0 = np.array([[red.i0 - 1, red.j0 - 1]])
         c0, p0 = evaluar(np.array([f0]), base0)
-        if not np.isfinite(p0[0]) or p0[0] > 0.25 * h:
+        if not np.isfinite(p0[0]) or p0[0] > 0.5 * h:
             # la cara de la semilla no está en la red: celda válida más cercana en el espacio
             ii, jj = np.nonzero(co)
             cen = 0.25 * (G[ii, jj] + G[ii + 1, jj] + G[ii, jj + 1] + G[ii + 1, jj + 1])

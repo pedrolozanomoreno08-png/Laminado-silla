@@ -1,0 +1,12 @@
+TABLA DE SURF 6'0" (cubierta, 1,83 m)
+Qué prueba: pieza grande y poco curvada -> empalmes automáticos por ancho de rollo.
+Zonas: PAD_COLA, NARIZ, CENTRO, CANTOS.  Material: vidrio 7781 (rollo de 1270 mm).
+Resultado esperado:
+  P001 cubierta 0° ........................ VERDE
+  P002 cubierta 45° (mínima energía) ...... ROJO leve (1,9 %) y DOS piezas: a 45° el patrón no cabe
+                                            en el ancho del rollo y se crea un empalme automático
+  P003 pad de cola, P005 centro ........... VERDE
+  P004 nariz a 45° ........................ ROJO leve (la nariz se estrecha y levanta)
+  Prueba: pestaña «Patrón plano» de P002 para ver las dos piezas con solape.
+
+Cómo abrirlo: Archivo › Abrir proyecto… › tabla_surf.lam  (o Archivo › Importar molde… › tabla_surf.wbpz para empezar de cero)

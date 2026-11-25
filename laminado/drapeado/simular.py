@@ -79,7 +79,7 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
     # margen de la zona de interés: la red necesita nodos fuera de la capa para llegar a las
     # esquinas y, en tubos con el hilo en hélice, para avanzar a lo largo del tubo (los solapes
     # de vueltas sucesivas los resuelve la asignación por continuidad de mapear_red)
-    margen_zona = max(3 * h, 0.2 * float(np.linalg.norm(np.ptp(malla_capa.V, axis=0))))
+    margen_zona = max(3 * h, 0.6 * float(np.linalg.norm(np.ptp(malla_capa.V, axis=0))))
 
     def zona(P):
         return zc.mas_cercano(P)[3] < margen_zona
@@ -96,6 +96,14 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         uv0, cub0, _ = mapear_red(red, malla_capa)
         uv, cubierto = uv0[origen], cub0[origen]
     info = {"nodos_red": int(red.ok.sum())}
+    if not cubierto.all() and cubierto.sum() >= 3:
+        # punto de partida de las zonas no alcanzadas: el tejido se prolonga desde la zona
+        # cubierta con la dirección local de los hilos (luego la energía lo ajusta)
+        from ..geom.parametrizacion import prolongar
+        try:
+            uv = prolongar(m, uv, cubierto)
+        except Exception:  # noqa: BLE001
+            pass
     sv = int(np.argmin(np.linalg.norm(m.V - P0, axis=1)))
     n0 = consultor_molde.proyectar(P0[None])[1]
     d0 = proyectar_tangente(np.asarray(direccion, float)[None], n0)[0]
@@ -111,8 +119,17 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
     elif not cubierto.all():
         # zonas que la red no alcanza (bloqueo del tejido): se completan por energía con la
         # zona alcanzada fija, para que el patrón plano sea continuo
-        uv, inf = drapear_energia(m, uv, sv, d0, max_iter=15, fijos=np.nonzero(cubierto)[0], **kw)
+        uv, inf = drapear_energia(m, uv, sv, d0, max_iter=60, fijos=np.nonzero(cubierto)[0], **kw)
         info["relleno_no_alcanzado"] = inf["estado"]
+        # las zonas completadas cuentan como cubiertas si el tejido no ha tenido que estirarse
+        # (solución físicamente válida: hilos inextensibles, sólo cizalla)
+        tmp = ResultadoDrapeado(m, uv, cubierto)
+        ea, eb = tmp.deformaciones()
+        ok_cara = (np.abs(ea) < 0.02) & (np.abs(eb) < 0.02) & (tmp.gradientes()[2] > 0)
+        malos = np.zeros(m.nv, bool)
+        malos[m.F[~ok_cara].ravel()] = True
+        info["relleno_valido_%"] = float(100 * ok_cara.mean())
+        cubierto = cubierto | ~malos
     return ResultadoDrapeado(m, uv, cubierto, estr, red, origen, darts_aj, info)
 
 

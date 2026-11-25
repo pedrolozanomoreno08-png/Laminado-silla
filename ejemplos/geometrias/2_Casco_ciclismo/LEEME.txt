@@ -1,0 +1,12 @@
+CASCO DE CICLISMO (carcasa ~270 x 210 mm)
+Qué prueba: doble curvatura fuerte (casi media esfera) -> darts.
+Zonas: CORONA, FRONTAL, NUCA, LATERAL_IZQ, LATERAL_DER.
+Resultado esperado:
+  P001 carcasa entera 0° con darts automáticos ... ROJO (~3,5 % > límite) frente a mucho más sin darts
+  P002 carcasa entera 45° ........................ ROJO (los darts automáticos no bastan)
+  P003 sólo la corona .............................. AMARILLO
+  P004 carcasa entera, mínima energía, sin darts .. ROJO
+  Prueba: en P002 añade darts a mano (botón «Añadir dart», clic derecho desde el borde hacia
+  arriba, Intro) y mira cómo baja el rojo. En la realidad un casco se hace con varias piezas.
+
+Cómo abrirlo: Archivo › Abrir proyecto… › casco_ciclismo.lam  (o Archivo › Importar molde… › casco_ciclismo.wbpz para empezar de cero)

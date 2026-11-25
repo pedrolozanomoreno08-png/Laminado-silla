@@ -1,0 +1,10 @@
+CONO (radio 150, altura 250 mm, sin base)
+Qué prueba: superficie desarrollable con vértice; el tejido se encuentra consigo mismo.
+Zonas: PUNTA, FALDA, MITAD_XPOS.
+Resultado esperado:
+  P002 medio cono .......... VERDE (un cono se desarrolla sin arrugas)
+  P001 cono entero ......... ROJO en una franja: al dar la vuelta, el tejido se encuentra consigo
+                             mismo por detrás; ahí hace falta un corte (costura)
+  P003 falda a 45° ......... ROJO leve
+
+Cómo abrirlo: Archivo › Abrir proyecto… › cono.lam  (o Archivo › Importar molde… › cono.wbpz para empezar de cero)

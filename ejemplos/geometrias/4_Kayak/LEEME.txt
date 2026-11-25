@@ -1,0 +1,11 @@
+CASCO DE KAYAK (2,4 m, molde hembra)
+Qué prueba: pieza larga con proa y popa finas; capas a 0°, 45° y 90°; empalmes.
+Zonas: QUILLA, FONDO, COSTADO_IZQ, COSTADO_DER, PROA, POPA.  Material: vidrio 7781.
+Resultado esperado:
+  P001 casco entero 0° .... AMARILLO (pequeñas zonas en proa y popa)
+  P002 casco entero 45° ... ROJO leve y 2 piezas (empalme por ancho de rollo)
+  P003 quilla 0° .......... VERDE
+  P004 fondo 90° .......... AMARILLO, 3 piezas (a 90° el fondo es más ancho que el rollo)
+  P005 proa (energía) ..... VERDE
+
+Cómo abrirlo: Archivo › Abrir proyecto… › casco_kayak.lam  (o Archivo › Importar molde… › casco_kayak.wbpz para empezar de cero)

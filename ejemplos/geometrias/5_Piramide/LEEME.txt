@@ -1,0 +1,11 @@
+PIRÁMIDE DE BASE CUADRADA (300 x 300 x 200 mm, sin base)
+Qué prueba: aristas vivas y un vértice.
+Zonas: CARA_XPOS, CARA_XNEG, CARA_YPOS, CARA_YNEG, VERTICE.
+Resultado esperado:
+  P003 una cara (plana) ...................... VERDE
+  P001 / P002 pirámide entera con darts ........ ROJO leve (~2-3 %) en las aristas y el vértice
+  P004 pirámide entera, mínima energía .......... ROJO
+  Nota: sobre una arista viva el modelo da una franja de cizalla de una celda de ancho
+  (los moldes reales siempre tienen un radio de acuerdo).
+
+Cómo abrirlo: Archivo › Abrir proyecto… › piramide.lam  (o Archivo › Importar molde… › piramide.wbpz para empezar de cero)

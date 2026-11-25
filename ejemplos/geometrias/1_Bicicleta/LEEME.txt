@@ -1,0 +1,11 @@
+CUADRO DE BICICLETA DE CARRETERA (talla ~54)
+Qué prueba: tubos cerrados, media caña por concha del molde, nudos complejos.
+Zonas: TUBO_xxx_IZQ/_DER (tramo recto, media caña), VAINA/TIRANTE_xxx_EXTERIOR/_INTERIOR,
+       NUDO_PEDALIER/DIRECCION/SILLIN_IZQ/_DER, MITAD_IZQ/_DER, cada tubo entero.
+Resultado esperado (Mayús+F5):
+  P001-P008 tubos, vaina y tirante ........ VERDE
+  P009-P011 nudos (pedalier, dirección, sillín) ... ROJO aunque lleven darts automáticos.
+  Es correcto: en la unión de varios tubos una sola pieza no se adapta; en fabricación se
+  dividen en piezas pequeñas. Prueba a crear capas en zonas más pequeñas y compara.
+
+Cómo abrirlo: Archivo › Abrir proyecto… › cuadro_bicicleta.lam  (o Archivo › Importar molde… › cuadro_bicicleta.wbpz para empezar de cero)

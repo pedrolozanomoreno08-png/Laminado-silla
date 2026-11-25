@@ -170,8 +170,11 @@ class Proyecto:
         if self._ext is None:
             m = self.malla
             diag = float(np.linalg.norm(np.ptp(m.V, axis=0)))
-            ext = max(self.extension, 0.12 * diag)
-            self._ext = extender_superficie(m, ext)
+            # superficie extendida amplia: los hilos generadores necesitan seguir más allá del
+            # borde para que la red llegue a los extremos de piezas largas con el tejido a 45°
+            ext = max(self.extension, 0.35 * diag)
+            paso = 2.5 * float(np.median(m.edge_lengths))
+            self._ext = extender_superficie(m, ext, anillos=max(2, int(np.ceil(ext / paso))))
             self._cons = Consultor(self._ext)
         return self._ext, self._cons
 
@@ -279,7 +282,7 @@ class Proyecto:
     def opciones(self, capa: Capa) -> OpcionesDrapeado:
         mat = self.materiales[capa.material]
         return OpcionesDrapeado(estrategia=capa.estrategia, h=capa.h or self.h,
-                                angulo_bloqueo=min(80.0, mat.cizalla_limite * 1.8),
+                                angulo_bloqueo=min(80.0, mat.cizalla_limite * 1.2),
                                 curva_semilla=np.asarray(capa.curva_semilla, float) if capa.curva_semilla else None,
                                 unidireccional=mat.unidireccional)
 
@@ -340,8 +343,10 @@ class Proyecto:
             "area_neta_mm2": neto_area, "area_corte_mm2": area_corte,
             "peso_g": area_corte * 1e-6 * mat.peso_area,
             "piezas": len(rc.piezas), "empalmes": len(rc.empalmes),
-            "estado": ("ROJO" if s.get("area_limite_%", 0) > 0.5 or s["cubierto_%"] < 99.5 else
-                       "AMARILLO" if s.get("area_aviso_%", 0) > 0.5 else "VERDE"),
+            # ROJO: cizalla por encima del límite o zonas que el tejido no alcanza (> 2 %)
+            # AMARILLO: cizalla por encima del aviso o pequeñas zonas no alcanzadas (bordes)
+            "estado": ("ROJO" if s.get("area_limite_%", 0) > 0.5 or s["cubierto_%"] < 98.0 else
+                       "AMARILLO" if s.get("area_aviso_%", 0) > 0.5 or s["cubierto_%"] < 99.5 else "VERDE"),
         })
         return s
 

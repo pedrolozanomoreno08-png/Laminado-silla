@@ -1,0 +1,14 @@
+GEOMETRÍAS DE PRUEBA – LAMINADO STUDIO
+Cada carpeta trae: proyecto listo (.lam), el mismo molde como proyecto de Ansys (.wbpz) y como
+malla (.stl), y un LEEME con lo que debe salir.
+
+1_Bicicleta ........ tubos cerrados y nudos
+2_Casco_ciclismo ... doble curvatura fuerte, darts
+3_Tabla_surf ....... pieza grande, empalmes por ancho de rollo
+4_Kayak ............ pieza larga, capas a 0/45/90°
+5_Piramide ......... aristas vivas y vértice
+6_Cubo_sin_tapa .... esquinas a 90° (patrón en cruz)
+7_Cono ............. superficie desarrollable; el tejido se encuentra consigo mismo
+
+IMPORTANTE: usa la versión del programa del 25/11 o posterior (las correcciones para aristas
+vivas y tubos son de hoy).

@@ -241,7 +241,7 @@ def _seguir_curva(consultor, P0, d0, h, n_max, curva):
     return np.array(nodos)
 
 
-def resolver_nodos(consultor, A, B, C, h, iters=12):
+def resolver_nodos(consultor, A, B, C, h, iters=20):
     """Resuelve vectorizado X sobre la superficie con |X−A| = |X−B| = h, cerca de A+B−C."""
     X0 = A + B - C
     X, n, _, _ = consultor.proyectar(X0)
@@ -253,7 +253,8 @@ def resolver_nodos(consultor, A, B, C, h, iters=12):
         la = np.linalg.norm(ra, axis=1)
         lb = np.linalg.norm(rb, axis=1)
         f = np.stack([la - h, lb - h], 1)
-        conv = np.abs(f).max(1) < 1e-7 * h
+        conv = np.abs(f).max(1) < 5e-3 * h      # 25 µm con h = 5 mm (sobre aristas vivas no se
+        #                                         puede exigir más: la superficie es facetada)
         if conv.all():
             break
         ga = ra / la[:, None]
@@ -366,7 +367,11 @@ def drapear_red(consultor: Consultor, semilla, direccion, h, estrategia="geodesi
             a = A - X
             b = B - X
             cang = (a * b).sum(1) / np.maximum(np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1), 1e-300)
-            orient = (np.cross(A - C, B - C) * n).sum(1) * (si * sj)
+            # la celda debe estar bien orientada respecto a la normal en X y en C: así se admiten
+            # celdas dobladas sobre una arista viva (hasta ~90°) pero no celdas plegadas
+            nC = consultor.proyectar(C)[1]
+            cruz = np.cross(A - C, B - C) * (si * sj)
+            orient = np.minimum((cruz * n).sum(1) * ref, (cruz * nC).sum(1) * ref) * ref
             # la celda debe conservar la orientación de la red (sin pliegues)
             # orientación respecto a la normal local (no a la de la semilla: en tubos o faldones
             # la superficie gira más de 90° y la normal de la semilla ya no sirve de referencia)

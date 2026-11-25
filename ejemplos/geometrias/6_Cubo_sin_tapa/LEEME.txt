@@ -1,0 +1,11 @@
+CUBO SIN TAPA (200 x 200 x 200 mm, como molde macho: techo + 4 paredes)
+Qué prueba: aristas y esquinas a 90° -> el caso clásico de darts en las esquinas.
+Zonas: TECHO, PARED_XPOS, PARED_XNEG, PARED_YPOS, PARED_YNEG.
+Resultado esperado:
+  P003 techo y P004 una pared ............... VERDE
+  P001 caja entera 0° con darts ............. ROJO en las 4 esquinas verticales
+  P002 caja entera 45° con darts ............ ROJO
+  Mira el «Patrón plano» de P001: sale la CRUZ clásica (techo + 4 paredes desplegadas); las
+  esquinas en rojo son el material sobrante que en la realidad se corta (dart) o se solapa.
+
+Cómo abrirlo: Archivo › Abrir proyecto… › caja_abierta.lam  (o Archivo › Importar molde… › caja_abierta.wbpz para empezar de cero)
