@@ -27,7 +27,15 @@ ansys-mapdl-reader (opcional, .rst), pytest, pyinstaller.
   core sample, espesores, proyecto .lam.
 - `salidas/` DXF, anidado (ráster + FFT), láser, ply book PDF, Excel, tablas ACP, `todo.py`.
 - `gui/` ventana Qt + VTK con picado por clic derecho; `python -m laminado --demo`.
-- 12 pruebas pytest; CI en GitHub compila el .exe de Windows (artefacto LaminadoStudio-windows).
+- 25 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
+  el .exe de Windows (artefacto LaminadoStudio-windows).
+- `verificacion/`: esfera analítica, invariancias, archivos Ansys reales, class40, salidas,
+  recorrido completo de la interfaz (`recorrido_gui.py`) y regresión de ejemplos
+  (`regresion_ejemplos.py`).
+- Empalmes: cada trozo conexo es una pieza; piezas redrapeadas desde su centro (geodésica si la
+  capa usa curva); empalmes por cizalla aceptados sólo si reducen el área roja y no dejan retales.
+- Piezas grandes y planas: red limitada a ~200 000 nodos donde la curvatura lo permite (en class40
+  la cizalla pico local baja de 27° a 20°; el área sobre aviso sigue en ~0 %).
 
 ## Pendiente / mejoras posibles
 - Drapear cada capa sobre la superficie desplazada por el espesor acumulado.
