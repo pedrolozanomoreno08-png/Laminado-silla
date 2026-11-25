@@ -79,7 +79,8 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
     # margen de la zona de interés: la red necesita nodos fuera de la capa para llegar a las
     # esquinas y, en tubos con el hilo en hélice, para avanzar a lo largo del tubo (los solapes
     # de vueltas sucesivas los resuelve la asignación por continuidad de mapear_red)
-    margen_zona = max(3 * h, 0.6 * float(np.linalg.norm(np.ptp(malla_capa.V, axis=0))))
+    # (acotado a 100 celdas: en piezas grandes y planas no hace falta más y la red crecería mucho)
+    margen_zona = max(3 * h, min(0.6 * float(np.linalg.norm(np.ptp(malla_capa.V, axis=0))), 100 * h))
 
     def zona(P):
         return zc.mas_cercano(P)[3] < margen_zona
@@ -304,12 +305,18 @@ def empalmes_por_ancho(res: ResultadoDrapeado, ancho_rollo: float, solape: float
                     automatico=True) for k in range(1, n)]
 
 
-def proponer_empalmes_cizalla(piezas, semilla, limite, h, solape=15.0, n_existentes=0, n_max=4):
+def proponer_empalmes_cizalla(piezas, semilla, limite, h, solape=15.0, n_existentes=0, n_max=4,
+                              fracciones=None):
     """Empalmes que separan las zonas con cizalla por encima del límite de la semilla de su
     pieza: cada zona queda en una pieza nueva que se drapea desde su propio centro (el camino
     del tejido es más corto y la cizalla acumulada, menor). Es la solución para zonas en silla
-    de montar, donde un dart no sirve."""
+    de montar, donde un dart no sirve.
+
+    Sin ``fracciones`` devuelve una lista de empalmes (plano a medio camino semilla→zona). Con
+    ``fracciones`` (p.ej. (0.5, 0.35, 0.65)) devuelve, por zona, la lista de alternativas con el
+    plano en esas posiciones del camino."""
     from ..geom.malla import TriMesh  # noqa: F401
+    fr = (0.5,) if fracciones is None else tuple(fracciones)
     propuestas = []
     for pz in piezas:
         g = np.abs(pz.cizalla())
@@ -332,8 +339,12 @@ def proponer_empalmes_cizalla(piezas, semilla, limite, h, solape=15.0, n_existen
             L = np.linalg.norm(d)
             if L < 6 * h:
                 continue
-            propuestas.append((A.sum(), Empalme("plano", tuple(S + 0.5 * d), tuple(d / L), solape=solape,
-                                                nombre=f"Empalme por cizalla {n_existentes + len(propuestas) + 1}",
-                                                automatico=True)))
+            alt = [Empalme("plano", tuple(S + t * d), tuple(d / L), solape=solape,
+                           nombre=f"Empalme por cizalla {n_existentes + len(propuestas) + 1}",
+                           automatico=True) for t in fr]
+            propuestas.append((A.sum(), alt))
     propuestas.sort(key=lambda t: -t[0])
-    return [e for _, e in propuestas[:n_max]]
+    propuestas = propuestas[:n_max]
+    if fracciones is None:
+        return [alt[0] for _, alt in propuestas]
+    return [alt for _, alt in propuestas]

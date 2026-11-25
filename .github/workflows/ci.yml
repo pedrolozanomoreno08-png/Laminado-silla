@@ -18,7 +18,7 @@ jobs:
       - name: Dependencias
         run: |
           sudo apt-get update && sudo apt-get install -y libgl1 libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1
-          pip install numpy scipy pyvista vtk matplotlib shapely ezdxf reportlab xlsxwriter pytest
+          pip install numpy scipy pyvista vtk matplotlib shapely ezdxf reportlab xlsxwriter h5py pytest
       - name: Pruebas
         run: python -m pytest -q
 
@@ -37,7 +37,7 @@ jobs:
       - name: Ejecutable
         run: pyinstaller --noconfirm laminado_studio.spec
       - name: Comprobar que arranca la parte de cálculo
-        run: python -c "import laminado.modelo.proyecto, laminado.salidas.todo; print('ok')"
+        run: python -c "import h5py, laminado.modelo.proyecto, laminado.salidas.todo; print('ok')"
       - name: Empaquetar
         run: Compress-Archive -Path dist/LaminadoStudio/* -DestinationPath LaminadoStudio-windows.zip
       - uses: actions/upload-artifact@v4

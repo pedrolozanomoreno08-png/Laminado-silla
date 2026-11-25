@@ -9,7 +9,7 @@ description = "Diseño y fabricación de laminados de composite: drapeado, produ
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy", "scipy", "PySide6", "pyvista", "pyvistaqt", "vtk", "matplotlib", "shapely",
-                "ezdxf", "reportlab", "xlsxwriter"]
+                "ezdxf", "reportlab", "xlsxwriter", "h5py"]
 
 [project.optional-dependencies]
 cad = ["gmsh"]

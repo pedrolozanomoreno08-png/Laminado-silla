@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import html
 import os
 import traceback
 
@@ -408,7 +409,22 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
             f"Área &gt; aviso: {s.get('area_aviso_%', 0):.2f} % &nbsp; &gt; límite: {s.get('area_limite_%', 0):.2f} %<br>"
             f"Cubierto por el tejido: {s['cubierto_%']:.1f} %<br>"
             f"Área neta: {s['area_neta_mm2'] / 1e6:.4f} m² &nbsp; corte: {s['area_corte_mm2'] / 1e6:.4f} m²<br>"
-            f"Peso: {s['peso_g']:.0f} g &nbsp; Piezas: {s['piezas']} &nbsp; Darts: {s['n_darts']}")
+            f"Peso: {s['peso_g']:.0f} g &nbsp; Piezas: {s['piezas']} &nbsp; Darts: {s['n_darts']}"
+            + (f"<br>Solape del patrón consigo mismo: <b>{s['solape_patron_%']:.2f} %</b>"
+               if s.get("solape_patron_%", 0) > 0.05 else "")
+            + self._notas_calculo(clave))
+
+    def _notas_calculo(self, clave):
+        info = self.p.resultados[clave].drapeado.info
+        notas = []
+        if info.get("darts_descartados_por_solape"):
+            notas.append(f"{info['darts_descartados_por_solape']} darts automáticos descartados "
+                         "(el patrón se solapaba: zona en silla de montar, usa empalmes)")
+        for t in info.get("empalmes_auto", []):
+            notas.append(t)
+        if not notas:
+            return ""
+        return "<br><small style='color:#555'>" + "<br>".join(html.escape(n) for n in notas[:8]) + "</small>"
 
     # ================================================================ dibujo
     def _dibujar(self):

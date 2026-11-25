@@ -14,7 +14,7 @@ for pkg in ("pyvista", "pyvistaqt", "vtkmodules"):
     datas += collect_data_files(pkg)
     binaries += collect_dynamic_libs(pkg)
     hidden += collect_submodules(pkg, filter=filtro)
-for pkg in ("ezdxf", "reportlab", "shapely", "gmsh"):
+for pkg in ("ezdxf", "reportlab", "shapely", "gmsh", "h5py"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

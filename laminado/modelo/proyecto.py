@@ -6,7 +6,7 @@ import base64
 import io
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
@@ -371,7 +371,13 @@ class Proyecto:
             # celda adaptada a la curvatura: como mucho ~1/3 del radio de curvatura mínimo
             # (percentil 95) para que la red siga fielmente tubos finos y radios pequeños
             # (no por debajo de ~0.4 del tamaño de elemento: la malla no resuelve más detalle)
-            op.h = min(op.h, max(1.0, 0.4 * float(np.median(neto.edge_lengths)), 0.3 / _curvatura_p95(neto)))
+            k95 = _curvatura_p95(neto)
+            h_curv = 0.3 / k95
+            h0 = min(op.h, max(1.0, 0.4 * float(np.median(neto.edge_lengths)), h_curv))
+            # piezas muy grandes y poco curvas (cubiertas, paneles de casco): limitar la red a
+            # ~200 000 nodos; sólo donde la curvatura lo permite, para no perder precisión
+            h_n = float(np.sqrt(malla_c.area / 2.0e5))
+            op.h = max(h0, min(h_n, max(self.h, h_curv)))
         darts = [Dart(np.asarray(p, float), f"Dart {k + 1}") for k, p in enumerate(capa.darts)]
         if capa.darts_auto:
             res = simular_con_darts_auto(malla_c, cons, semilla, direccion, op,
@@ -385,33 +391,76 @@ class Proyecto:
         if capa.empalme_auto and mat.ancho_rollo > 0:
             empalmes += empalmes_por_ancho(res, mat.ancho_rollo, capa.solape_empalme)
         res.phi_neto = phi_r
-        piezas = self._piezas(res, empalmes, cons, op)
+        cache = {}
+        piezas = self._piezas(res, empalmes, cons, op, cache)
         if capa.empalmes_auto_cizalla:
-            for _ in range(2):
-                nuevos = proponer_empalmes_cizalla(piezas, semilla, mat.cizalla_limite, op.h,
-                                                   capa.solape_empalme, len(empalmes))
-                if not nuevos:
+            n_auto_max = 4
+            n_auto = 0
+            diag = []
+            res.info["empalmes_auto"] = diag
+            roja = _area_roja(piezas, mat.cizalla_limite)
+            probados = []
+            for _ in range(4):
+                grupos = proponer_empalmes_cizalla(piezas, semilla, mat.cizalla_limite, op.h,
+                                                   capa.solape_empalme, len(empalmes),
+                                                   n_max=n_auto_max - n_auto, fracciones=(0.5, 0.35, 0.65))
+                # no repetir propuestas ya probadas
+                grupos = [[e for e in alt if not _ya_probado(e, probados, op.h)] for alt in grupos]
+                grupos = [alt for alt in grupos if alt]
+                if not grupos:
                     break
-                empalmes += nuevos
-                piezas = self._piezas(res, empalmes, cons, op)
+                aceptados = []
+                for alt in grupos:
+                    for e in alt:
+                        probados.append(e)
+                        e.nombre = f"Empalme por cizalla {len(empalmes) + len(aceptados) + 1}"
+                        prueba = self._piezas(res, empalmes + aceptados + [e], cons, op, cache)
+                        r2 = _area_roja(prueba, mat.cizalla_limite)
+                        # ni retales: cada pieza debe tener un tamaño razonable de laminado neto
+                        amin = min(_area_neta(q) for q in prueba)
+                        if amin < 25 * op.h ** 2:
+                            diag.append(f"{e.nombre}: descartado (deja un retal de {amin:.0f} mm²)")
+                            continue
+                        if r2 < roja - max(1e-9, 0.02 * roja):
+                            diag.append(f"{e.nombre}: aceptado (área sobre el límite {roja:.0f} → {r2:.0f} mm²)")
+                            aceptados.append(e)
+                            piezas, roja = prueba, r2
+                            break
+                        diag.append(f"{e.nombre}: descartado (no reduce la cizalla: {roja:.0f} → {r2:.0f} mm²)")
+                if not aceptados:
+                    break
+                empalmes += aceptados
+                n_auto += len(aceptados)
+                if n_auto >= n_auto_max or roja <= 0:
+                    break
         rc = ResultadoCapa(capa.nombre, res, piezas, neto, phi_r, empalmes)
         rc.resumen = self._resumen(capa, rc)
         self.resultados[capa.nombre] = rc
         return rc
 
-    def _piezas(self, res, empalmes, cons, op):
+    def _piezas(self, res, empalmes, cons, op, cache=None):
         """Divide la capa por los empalmes y drapea cada pieza por separado (con su propia
         semilla en el centro de la pieza y la dirección de fibra que tenía allí la capa entera):
         así un empalme alivia la cizalla igual que en el taller."""
         if not empalmes:
             return [res]
         piezas = _dividir_con_phi(res, empalmes)
+        # trozos que sólo son exceso (sin laminado neto) no se cortan
+        utiles = [q for q in piezas if _area_neta(q) > 1.0]
+        piezas = utiles or piezas
         if len(piezas) <= 1:
             return piezas
         ea, _ = res.fibras()
         cr = Consultor(res.malla)
+        # la curva de semilla de la capa entera no suele pasar por cada pieza: las piezas se
+        # drapean geodésicamente desde su centro con la dirección local de la capa
+        op_p = replace(op, estrategia="geodesica", curva_semilla=None) if op.estrategia == "curva" else op
         out = []
         for pz in piezas:
+            clave = (pz.malla.nv, pz.malla.nf, hash(pz.malla.V.tobytes()), hash(pz.malla.F.tobytes()))
+            if cache is not None and clave in cache:
+                out.append(cache[clave])
+                continue
             try:
                 d = fast_marching(pz.malla, pz.malla.boundary_vertices_mask)
                 d = np.where(np.isfinite(d), d, 0.0)
@@ -419,12 +468,16 @@ class Proyecto:
                 cg = (pz.malla.face_centroids * pz.malla.face_areas[:, None]).sum(0) / pz.malla.area
                 sd = pz.malla.V[cand[int(np.argmin(np.linalg.norm(pz.malla.V[cand] - cg, axis=1)))]]
                 _, f, _, _ = cr.mas_cercano(sd[None])
-                rp = simular_capa(pz.malla, cons, sd, ea[f[0]], op)
+                rp = simular_capa(pz.malla, cons, sd, ea[f[0]], op_p)
                 rp.phi_neto = pz.phi_neto[rp.origen_vertice] if rp.origen_vertice is not None else pz.phi_neto
                 rp.redrapeada = True
-                out.append(rp)
+                # nunca peor que la pieza recortada de la capa entera
+                elegida = pz if _cubierta(rp) + 1e-9 < _cubierta(pz) else rp
             except Exception:  # noqa: BLE001
-                out.append(pz)
+                elegida = pz
+            if cache is not None:
+                cache[clave] = elegida
+            out.append(elegida)
         return out
 
     def simular_todas(self, progreso=None):
@@ -634,6 +687,40 @@ def _dif_ang(real, nominal, mat):
     return float(d)
 
 
+def _cubierta(r):
+    """Fracción de área neta cubierta por el tejido."""
+    phi = getattr(r, "phi_neto", None)
+    nz = (phi[r.malla.F].mean(1) <= 1e-9) if phi is not None else np.ones(r.malla.nf, bool)
+    A = r.malla.face_areas[nz]
+    return float(A[r.cara_cubierta()[nz]].sum() / max(A.sum(), 1e-300))
+
+
+def _ya_probado(e, probados, h):
+    for q in probados:
+        if (np.linalg.norm(np.subtract(e.punto, q.punto)) < 2 * h
+                and abs(float(np.dot(e.normal, q.normal))) > 0.98):
+            return True
+    return False
+
+
+def _area_neta(r):
+    phi = getattr(r, "phi_neto", None)
+    if phi is None:
+        return float(r.malla.area)
+    return float(r.malla.face_areas[phi[r.malla.F].mean(1) <= 1e-9].sum())
+
+
+def _area_roja(piezas, limite):
+    """Área neta por encima del límite de cizalla o sin cubrir."""
+    tot = 0.0
+    for r in piezas:
+        phi = getattr(r, "phi_neto", None)
+        nz = (phi[r.malla.F].mean(1) <= 1e-9) if phi is not None else np.ones(r.malla.nf, bool)
+        mal = (np.abs(r.cizalla()) > limite) | ~r.cara_cubierta()
+        tot += float(r.malla.face_areas[nz & mal].sum())
+    return tot
+
+
 def _dividir_con_phi(res, empalmes):
     """Divide en piezas manteniendo phi_neto en cada pieza."""
     from ..drapeado.simular import _phi_empalme
@@ -653,10 +740,17 @@ def _dividir_con_phi(res, empalmes):
                 sub, ids, _ = m2.submalla(mask)
                 if sub.nf == 0:
                     continue
-                q = ResultadoDrapeado(sub, ex2[ids, :2], ex2[ids, 2] > 0.5, p.estrategia, p.red,
-                                      None, p.darts, dict(p.info))
-                q.phi_neto = ex2[ids, 3]
-                nuevas.append(q)
+                # cada trozo conexo es una pieza de tejido distinta
+                nc, et = sub.componentes()
+                for c in range(nc):
+                    s2, ids2, _ = sub.submalla(et == c)
+                    if s2.nf == 0 or s2.area < 1e-6:
+                        continue
+                    jj = ids[ids2]
+                    q = ResultadoDrapeado(s2, ex2[jj, :2], ex2[jj, 2] > 0.5, p.estrategia, p.red,
+                                          None, p.darts, dict(p.info))
+                    q.phi_neto = ex2[jj, 3]
+                    nuevas.append(q)
         piezas = nuevas
     return piezas
 

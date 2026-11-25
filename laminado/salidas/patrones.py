@@ -60,7 +60,11 @@ def patrones_de(proyecto, nombre_capa):
     out = []
     for k, pz in enumerate(rc.piezas):
         bucles, _ = pz.contornos_planos()
+        bucles = [b[np.isfinite(b).all(1)] for b in bucles]
         corte = _poligono(bucles)
+        if corte.is_empty or corte.area < 1e-3:
+            # pieza sin tejido drapeado (zona no alcanzada): no tiene patrón que cortar
+            continue
         neto = rc.contornos_netos_uv(pz)
         darts = []
         for d in pz.darts:
@@ -70,6 +74,9 @@ def patrones_de(proyecto, nombre_capa):
             _, idx = arbol.query(np.asarray(d.puntos))
             darts.append(pz.uv[idx])
         etiqueta = f"{nombre_capa}" + (f"-{k + 1}" if len(rc.piezas) > 1 else "")
+        darts = [dd for dd in darts if np.isfinite(dd).all()]
+        neto = [nn[np.isfinite(nn).all(1)] for nn in neto if len(nn)]
+        neto = [nn for nn in neto if len(nn) >= 2]
         out.append(Patron(nombre_capa, k + 1, capa.material, capa.orientacion, corte, neto, darts,
                           etiqueta, rc.resumen.get("estado", "")))
     return out
