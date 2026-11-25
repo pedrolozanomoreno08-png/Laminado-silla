@@ -68,6 +68,8 @@ class Contorno:
     desfase: float = 0.0                                # mm (+ crece, − encoge)
     exceso: float = 0.0                                 # mm de material de recorte fuera del neto
     suavizado: float = 0.0                              # mm: suaviza el borde escalonado de una selección
+    exceso_borde: float = 0.0                           # mm que la selección sigue más allá del borde
+                                                        # libre del molde (recorte en el borde de pieza)
 
 
 @dataclass
@@ -305,6 +307,12 @@ class Proyecto:
             caras = sel_total[np.where(mapa >= 0, mapa, self.malla.nf)]
             if not caras.any():
                 raise ValueError("La selección del contorno está vacía")
+            if contorno.exceso_borde > 0 and (mapa < 0).any():
+                # donde la selección llega al borde libre del molde, la capa sigue por la superficie
+                # extendida (material de recorte en el borde de pieza): sin huecos en el borde
+                d0 = distancia_a_borde_region(ext, caras, limite=contorno.exceso_borde * 1.5)
+                lejos = d0[ext.F].max(1) > contorno.exceso_borde
+                caras = caras | ((mapa < 0) & ~lejos)
             # la distancia sólo hace falta cerca del borde (desfases, excesos, rampas, suavizado)
             lim = 300.0 + abs(contorno.desfase) + contorno.exceso
             phi = distancia_a_borde_region(ext, caras, limite=lim)
@@ -343,7 +351,7 @@ class Proyecto:
         sel = tuple((n, hash(np.asarray(self.molde.selecciones.get(n, []), np.int64).tobytes()))
                     for n in contorno.selecciones) if contorno.tipo == "seleccion" else ()
         return (contorno.tipo, sel, json.dumps(contorno.puntos, default=_json_def), contorno.roseta,
-                round(contorno.suavizado, 6))
+                round(contorno.suavizado, 6), round(getattr(contorno, "exceso_borde", 0.0), 6))
 
     def _phi_cache(self, contorno, ext, mapa, clave_sup):
         if not hasattr(self, "_phis"):

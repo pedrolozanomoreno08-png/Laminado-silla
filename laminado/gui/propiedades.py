@@ -181,11 +181,15 @@ class EditorContorno(QtWidgets.QGroupBox):
         self.exceso = _num(contorno.exceso, 0, 500, 1, "mm")
         f.addRow("Desfase del borde", self.desfase)
         f.addRow("Exceso de recorte", self.exceso)
+        self.exceso_borde = _num(contorno.exceso_borde, 0, 200, 1, "mm")
+        self.exceso_borde.setToolTip("Tejido que la selección sigue más allá de los bordes libres del molde")
+        f.addRow("Exceso en borde de pieza", self.exceso_borde)
         self.tipo.currentIndexChanged.connect(self._cambio)
         self.sel.itemSelectionChanged.connect(self._cambio)
         self.puntos.textChanged.connect(self._cambio_pts)
         self.desfase.valueChanged.connect(self._cambio)
         self.exceso.valueChanged.connect(self._cambio)
+        self.exceso_borde.valueChanged.connect(self._cambio)
         self._visibles()
 
     def _visibles(self):
@@ -208,6 +212,7 @@ class EditorContorno(QtWidgets.QGroupBox):
         self.c.selecciones = [self.sel.item(i).text() for i in range(self.sel.count()) if self.sel.item(i).isSelected()]
         self.c.desfase = self.desfase.value()
         self.c.exceso = self.exceso.value()
+        self.c.exceso_borde = self.exceso_borde.value()
         self._visibles()
         self.cambiado.emit()
 

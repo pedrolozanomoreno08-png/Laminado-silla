@@ -52,6 +52,12 @@ class DialogoCobertura(QtWidgets.QDialog):
         self.solape.setValue(15)
         self.solape.setSuffix(" mm")
         f.addRow("Solape entre parches", self.solape)
+        self.exceso_borde = QtWidgets.QDoubleSpinBox()
+        self.exceso_borde.setRange(0, 100)
+        self.exceso_borde.setValue(5)
+        self.exceso_borde.setSuffix(" mm")
+        self.exceso_borde.setToolTip("Tejido más allá de los bordes libres del molde (se recorta después)")
+        f.addRow("Exceso en bordes de pieza", self.exceso_borde)
         self.radio = QtWidgets.QDoubleSpinBox()
         self.radio.setRange(20, 5000)
         self.radio.setValue(320)
@@ -83,7 +89,7 @@ class DialogoCobertura(QtWidgets.QDialog):
         for o in oris:
             out.append(OpcionesCobertura(
                 material=self.mat.currentText(), orientacion=o, referencia=self.ref.currentData(),
-                solape=self.solape.value(), radio_max=self.radio.value(), criterio=self.crit.currentData(),
+                solape=self.solape.value(), exceso_borde=self.exceso_borde.value(), radio_max=self.radio.value(), criterio=self.crit.currentData(),
                 selecciones=sels, regiones=regs, prefijo=f"{pref}{o:g}_", secuencia=f"Cobertura {o:g}°"))
         return out
 

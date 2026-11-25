@@ -46,6 +46,7 @@ class OpcionesCobertura:
     secuencia: str = ""
     max_parches: int = 120
     hueco_admisible: float = 0.0     # mm² de hueco total tolerado (0: ninguno)
+    exceso_borde: float = 5.0        # mm de tejido más allá de los bordes libres del molde (recorte)
 
 
 @dataclass
@@ -228,7 +229,8 @@ class Cubridor:
         else:
             ros_name = self.op.referencia
         c = Capa(nombre, self.op.material, self.op.orientacion, roseta=ros_name,
-                 contorno=Contorno("seleccion", [sel], exceso=0.0), semilla=tuple(map(float, self.m.V[semilla_v])),
+                 contorno=Contorno("seleccion", [sel], exceso=0.0,
+                                         exceso_borde=self.op.exceso_borde), semilla=tuple(map(float, self.m.V[semilla_v])),
                  estrategia=self.op.estrategia, secuencia=self.op.secuencia)
         c.empalme_auto = False
         c.notas = "Parche de cobertura automática"
@@ -504,6 +506,17 @@ class Cubridor:
             self.creadas.append(c)
             k += 1
         self._absorber_migas()
+        # comprobación final con el tejido realmente drapeado (no con la estimación del bucle):
+        # lo que no esté cubierto se reabsorbe en el parche vecino
+        if self.creadas:
+            for _ in range(2):
+                real = mapa_cobertura(self.p, [c.nombre for c in self.creadas]) > 0
+                falta = self.objetivo & ~real
+                if not falta.any():
+                    break
+                self.cubierto &= ~falta
+                self._absorber_migas()
+            self.cubierto = ~self.objetivo | (mapa_cobertura(self.p, [c.nombre for c in self.creadas]) > 0)
         hueco = ~self.cubierto
         inf.hueco_mm2 = float(m.face_areas[hueco].sum())
         inf.cobertura_pct = 100.0 * (1 - inf.hueco_mm2 / max(A_obj, 1e-300))
@@ -592,7 +605,19 @@ class Cubridor:
         c.estrategia = "energia"
         self.p.capas.append(c)
         try:
-            self.p.simular(c)
+            rc = self.p.simular(c)
+            if rc.resumen.get("estado") == "ROJO":
+                # zona imposible sin cortes: se prueba con darts automáticos y se queda lo mejor
+                viejo = rc
+                c.darts_auto = True
+                try:
+                    rc2 = self.p.simular(c)
+                except Exception:  # noqa: BLE001
+                    rc2 = None
+                if rc2 is None or (rc2.resumen.get("area_limite_%", 100)
+                                   >= viejo.resumen.get("area_limite_%", 100)):
+                    c.darts_auto = False
+                    self.p.resultados[c.nombre] = viejo
         except Exception:  # noqa: BLE001
             self._quitar_capa(c)
             return None, None
