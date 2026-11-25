@@ -403,6 +403,7 @@ class Proyecto:
         phi = self._phi_cache(c, ext, mapa, clave_sup)
         if phi is None:
             raise ValueError("La selección del contorno está vacía")
+        phi = np.where(np.isfinite(phi), phi, np.sign(phi) * 1e6)
         desp = np.zeros((ext.nv, 3))
         if self.drapeado_con_espesor and isinstance(capa, Capa):
             t = self.espesor_debajo(capa, ext, mapa, clave_sup)

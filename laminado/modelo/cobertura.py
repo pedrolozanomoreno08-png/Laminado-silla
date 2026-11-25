@@ -404,6 +404,24 @@ class Cubridor:
             self._quitar_capa(c)
             return None, None
         bien2 = self._caras_bien(rc, parche | (dh <= op.solape))
+        if rc.resumen.get("estado") == "ROJO":
+            # el parche definitivo (borde suavizado) ha tocado zona mala: se recorta a lo bien
+            # cubierto y se vuelve a simular; si sigue en rojo, no vale
+            parche2 = self._abrir(parche & bien2, max(0.4 * op.solape, 2 * arista))
+            if not (parche2 & hueco).any():
+                self._quitar_capa(c)
+                return None, None
+            parche2 = _componente_con(self.A, parche2, int(np.nonzero(parche2 & hueco)[0][0]))
+            self.p.molde.selecciones[c.contorno.selecciones[0]] = np.nonzero(parche2)[0]
+            try:
+                rc = self.p.simular(c)
+            except Exception:  # noqa: BLE001
+                self._quitar_capa(c)
+                return None, None
+            if rc.resumen.get("estado") == "ROJO":
+                self._quitar_capa(c)
+                return None, None
+            bien2 = self._caras_bien(rc, parche2 | (dh <= op.solape))
         return c, bien2
 
     # ------------------------------------------------------------------ bucle
