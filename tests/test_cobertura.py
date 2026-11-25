@@ -46,18 +46,23 @@ def selecciones_t(m):
 
 
 def test_cobertura_completa_nudo_en_t():
+    """Media concha de un nudo en T: un parche por tubo y parches pequeños en la unión y los
+    casquetes; sin huecos, todos producibles y con solape entre parches."""
     m = _tubo_en_t()
     p = Proyecto("T")
-    p.cargar_molde(Molde(m, {}, origen="prueba"))
+    p.cargar_molde(Molde(m, selecciones_t(m), origen="prueba"))
     p.h = 4.0
-    inf = cubrir(p, OpcionesCobertura(MAT, 0.0, solape=10.0, radio_max=200.0))
+    inf = cubrir(p, OpcionesCobertura(MAT, 0.0, solape=10.0, radio_max=200.0, selecciones=["MITAD_IZQ"],
+                                      regiones=["TUBO_H", "TUBO_V"]))
     assert inf.hueco_mm2 == 0.0 and inf.cobertura_pct == 100.0
     assert not inf.no_producibles
+    assert len(inf.capas) <= 16
     for c in p.capas:
         s = p.resultados[c.nombre].resumen
         assert s["estado"] in ("VERDE", "AMARILLO"), (c.nombre, s["estado"])
         assert s["solape_patron_%"] < 0.5
     n = mapa_cobertura(p)
-    assert (n >= 1).all()
-    # tiene que haber solape entre parches contiguos (no a tope)
+    izq = p.molde.selecciones["MITAD_IZQ"]
+    assert (n[izq] >= 1).all()
+    # solape entre parches contiguos (no a tope)
     assert m.face_areas[n >= 2].sum() > 0

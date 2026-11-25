@@ -37,6 +37,16 @@ class DialogoCobertura(QtWidgets.QDialog):
                 self.zona.addItem(n)
         self.zona.setMaximumHeight(140)
         f.addRow("Zona (ninguna = molde entero)", self.zona)
+        self.regiones = QtWidgets.QListWidget()
+        self.regiones.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
+        for n in proyecto.molde.selecciones:
+            if not n.startswith("_"):
+                self.regiones.addItem(n)
+        self.regiones.setMaximumHeight(140)
+        self.regiones.setToolTip("Se intenta cubrir cada una con una sola pieza (p.ej. cada tubo) antes de "
+                                 "rellenar lo que quede con parches automáticos. Para un molde de dos conchas, "
+                                 "elige como zona una mitad y como regiones los tubos.")
+        f.addRow("Regiones (un parche por región, opcional)", self.regiones)
         self.solape = QtWidgets.QDoubleSpinBox()
         self.solape.setRange(0, 100)
         self.solape.setValue(15)
@@ -67,13 +77,14 @@ class DialogoCobertura(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "Orientaciones", "Escribe números separados por comas.")
             return []
         sels = [i.text() for i in self.zona.selectedItems()]
+        regs = [i.text() for i in self.regiones.selectedItems()]
         pref = self.pref.text().strip() or "C"
         out = []
         for o in oris:
             out.append(OpcionesCobertura(
                 material=self.mat.currentText(), orientacion=o, referencia=self.ref.currentData(),
                 solape=self.solape.value(), radio_max=self.radio.value(), criterio=self.crit.currentData(),
-                selecciones=sels, prefijo=f"{pref}{o:g}_", secuencia=f"Cobertura {o:g}°"))
+                selecciones=sels, regiones=regs, prefijo=f"{pref}{o:g}_", secuencia=f"Cobertura {o:g}°"))
         return out
 
 
