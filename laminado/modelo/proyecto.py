@@ -14,7 +14,7 @@ from ..ansys.lector import Molde, abrir_molde
 from ..drapeado.red import Dart
 from ..drapeado.resultado import ResultadoDrapeado
 from ..drapeado.simular import (Empalme, OpcionesDrapeado, dividir_en_piezas, empalmes_por_ancho,
-                                simular_capa, simular_con_darts_auto)
+                                proponer_empalmes_cizalla, simular_capa, simular_con_darts_auto)
 from ..geom.consulta import Consultor, proyectar_tangente
 from ..geom.cortes import cortar_por_nivel, extender_superficie
 from ..geom.geodesia import distancia_a_borde_region, fast_marching
@@ -84,6 +84,7 @@ class Capa:
     empalmes: list = field(default_factory=list)       # dicts de Empalme
     empalme_auto: bool = True
     solape_empalme: float = 15.0
+    empalmes_auto_cizalla: bool = False   # dividir la capa donde la cizalla supera el límite
     curva_semilla: list = field(default_factory=list)
     secuencia: str = ""
     activa: bool = True
@@ -133,6 +134,18 @@ class ResultadoCapa:
             out.append(r.uv[ids[b]])
         return out
 
+    def localizar(self, X):
+        """(resultado de pieza o de la capa, cara) más cercanos a cada punto X (k,3)."""
+        cands = [pz for pz in self.piezas if getattr(pz, "redrapeada", False)] or [self.drapeado]
+        mejor_d = np.full(len(X), np.inf)
+        mejor_r = np.zeros(len(X), int)
+        mejor_f = np.zeros(len(X), int)
+        for k, r in enumerate(cands):
+            _, f, _, d = Consultor(r.malla).mas_cercano(X)
+            m = d < mejor_d
+            mejor_d[m], mejor_r[m], mejor_f[m] = d[m], k, f[m]
+        return [cands[k] for k in mejor_r], mejor_f
+
     def _phi_de(self, r):
         if r is self.drapeado:
             return self.phi_neto
@@ -158,25 +171,73 @@ class Proyecto:
     # ------------------------------------------------------------------ molde
     def cargar_molde(self, ruta_o_molde):
         self.molde = abrir_molde(ruta_o_molde) if isinstance(ruta_o_molde, str) else ruta_o_molde
+        # rosetas definidas en ACP (si el modelo viene de un proyecto con composites)
+        for nombre, o, d1, d2 in getattr(self.molde, "rosetas", []) or []:
+            nmb = f"ACP: {nombre}"
+            if nmb not in self.rosetas and np.linalg.norm(d1) > 0 and np.linalg.norm(np.cross(d1, d2)) > 0:
+                self.rosetas[nmb] = Roseta(nmb, tuple(map(float, o)), tuple(map(float, d1)),
+                                           tuple(map(float, np.cross(d1, d2))))
         self._ext = None
         self._cons = None
+        self._superficies = {}
         self.resultados.clear()
 
     @property
     def malla(self) -> TriMesh:
         return self.molde.malla
 
-    def extendida(self):
-        if self._ext is None:
-            m = self.malla
-            diag = float(np.linalg.norm(np.ptp(m.V, axis=0)))
+    def superficie(self, componentes=None):
+        """Superficie de drapeado para un conjunto de paneles (componentes conexas del molde por
+        aristas de variedad): sus caras + tapas de agujeros + superficie extendida.
+
+        En un ensamblaje (casco, cubierta, mamparos unidos en T) cada capa se drapea sólo sobre
+        sus paneles: la red de tejido no «cae» sobre otros paneles al cruzar una abertura.
+        Devuelve (malla, consultor, cara original del molde de cada cara o −1)."""
+        m = self.malla
+        nc, etiqueta = m.componentes()
+        if componentes is None:
+            componentes = range(nc)
+        clave = tuple(sorted(set(int(c) for c in componentes)))
+        if not hasattr(self, "_superficies"):
+            self._superficies = {}
+        if clave not in self._superficies:
+            from ..geom.cortes import rellenar_agujeros
+            mask = np.isin(etiqueta, clave)
+            base, _, caras = m.submalla(mask)
+            diag = float(np.linalg.norm(np.ptp(base.V, axis=0)))
             # superficie extendida amplia: los hilos generadores necesitan seguir más allá del
             # borde para que la red llegue a los extremos de piezas largas con el tejido a 45°
             ext = max(self.extension, 0.35 * diag)
-            paso = 2.5 * float(np.median(m.edge_lengths))
-            self._ext = extender_superficie(m, ext, anillos=max(2, int(np.ceil(ext / paso))))
-            self._cons = Consultor(self._ext)
-        return self._ext, self._cons
+            paso = 2.5 * float(np.median(base.edge_lengths))
+            con_tapas = rellenar_agujeros(base)
+            S = extender_superficie(con_tapas, ext, anillos=max(2, int(np.ceil(ext / paso))))
+            mapa = -np.ones(S.nf, np.int64)
+            mapa[:base.nf] = caras            # las caras del molde van primero (tapas y extensión después)
+            # panel plano (mamparo, costilla, placa): el tejido se drapea sobre su plano infinito,
+            # sin depender de la forma del contorno (entrantes, aberturas en U…)
+            plano = _plano_si_plano(base, ext)
+            self._superficies[clave] = (S, Consultor(plano if plano is not None else S), mapa)
+        return self._superficies[clave]
+
+    def extendida(self):
+        S, cons, _ = self.superficie()
+        return S, cons
+
+    def componentes_de(self, contorno: "Contorno"):
+        """Paneles del molde afectados por un contorno."""
+        m = self.malla
+        nc, etiqueta = m.componentes()
+        if contorno.tipo == "seleccion":
+            caras = np.concatenate([np.asarray(self.molde.selecciones.get(n, []), int) for n in contorno.selecciones] or
+                                   [np.array([], int)])
+            if len(caras) == 0:
+                raise ValueError("La selección del contorno está vacía")
+            return sorted(set(etiqueta[caras].tolist()))
+        if contorno.tipo == "poligono":
+            phi = self._phi_contorno(contorno, m, np.arange(m.nf))
+            dentro = phi[m.F].min(1) <= contorno.desfase + contorno.exceso
+            return sorted(set(etiqueta[dentro].tolist())) or list(range(nc))
+        return list(range(nc))
 
     # -------------------------------------------------------------- utilidades
     def capa(self, nombre) -> Capa:
@@ -212,20 +273,23 @@ class Proyecto:
         return neto.V[cand[int(np.argmin(np.linalg.norm(neto.V[cand] - cg, axis=1)))]]
 
     # ---------------------------------------------------------------- regiones
-    def _phi_contorno(self, contorno: Contorno, ext: TriMesh):
-        """Función con signo (≤0 dentro) en los vértices de la malla extendida."""
-        nv_molde = self.malla.nv
+    def _phi_contorno(self, contorno: Contorno, ext: TriMesh, mapa=None):
+        """Función con signo (≤0 dentro) en los vértices de la superficie de drapeado.
+
+        ``mapa``: cara original del molde de cada cara de ``ext`` (−1 en tapas y extensión)."""
+        if mapa is None:
+            mapa = np.arange(ext.nf)
+            mapa[self.malla.nf:] = -1
         if contorno.tipo == "molde":
-            # distancia al borde del molde (positiva en la extensión)
-            mask = np.zeros(ext.nf, bool)
-            mask[:self.malla.nf] = True
-            return distancia_a_borde_region(ext, mask)
+            # distancia al borde del molde (positiva en tapas y extensión)
+            return distancia_a_borde_region(ext, mapa >= 0)
         if contorno.tipo == "seleccion":
-            caras = np.zeros(ext.nf, bool)
+            sel_total = np.zeros(self.malla.nf + 1, bool)
             for nombre in contorno.selecciones:
                 sel = self.molde.selecciones.get(nombre)
                 if sel is not None:
-                    caras[sel] = True
+                    sel_total[np.asarray(sel, int)] = True
+            caras = sel_total[np.where(mapa >= 0, mapa, self.malla.nf)]
             if not caras.any():
                 raise ValueError("La selección del contorno está vacía")
             return distancia_a_borde_region(ext, caras)
@@ -243,18 +307,22 @@ class Proyecto:
                 P = np.c_[(P - o) @ ex, (P - o) @ ey]
             poli = Polygon(P).buffer(0)
             Q = np.c_[(ext.V - o) @ ex, (ext.V - o) @ ey]
-            frontera = poli.exterior
-            d = np.array([frontera.distance(Point(q)) for q in Q])
-            dentro = np.array([poli.contains(Point(q)) for q in Q])
-            del nv_molde
+            import shapely
+            pts = shapely.points(Q)
+            d = shapely.distance(poli.exterior, pts)
+            dentro = shapely.contains(poli, pts)
             return np.where(dentro, -d, d)
         raise ValueError(f"Tipo de contorno desconocido: {contorno.tipo}")
 
     def region(self, capa: Capa | Nucleo):
-        """(malla de corte = neto + exceso, phi neto en sus vértices, malla neta)."""
-        ext, _ = self.extendida()
+        """(malla de corte = neto + exceso, phi neto en sus vértices, malla neta).
+
+        Se trabaja sobre la superficie de los paneles afectados (ver ``superficie``); el
+        consultor de esa superficie queda en ``self._cons_capa`` para el drapeado."""
         c = capa.contorno
-        phi = self._phi_contorno(c, ext)
+        ext, cons, mapa = self.superficie(self.componentes_de(c))
+        self._cons_capa = cons
+        phi = self._phi_contorno(c, ext, mapa)
         desf = self.desfase_total(capa) if isinstance(capa, Capa) else c.desfase
         # corte por el contorno neto (desfase): phi' = phi - desfase
         m1, phi1, _ = cortar_por_nivel(ext, phi, desf)
@@ -292,8 +360,8 @@ class Proyecto:
         if self.molde is None:
             raise RuntimeError("No hay molde cargado")
         mat = self.materiales[capa.material]
-        _, cons = self.extendida()
         malla_c, phi_c, neto = self.region(capa)
+        cons = self._cons_capa
         semilla = self.semilla_de(capa, neto)
         n0 = cons.proyectar(semilla[None])[1]
         ros = self.rosetas.get(capa.roseta) or next(iter(self.rosetas.values()))
@@ -317,11 +385,47 @@ class Proyecto:
         if capa.empalme_auto and mat.ancho_rollo > 0:
             empalmes += empalmes_por_ancho(res, mat.ancho_rollo, capa.solape_empalme)
         res.phi_neto = phi_r
-        piezas = _dividir_con_phi(res, empalmes) if empalmes else [res]
+        piezas = self._piezas(res, empalmes, cons, op)
+        if capa.empalmes_auto_cizalla:
+            for _ in range(2):
+                nuevos = proponer_empalmes_cizalla(piezas, semilla, mat.cizalla_limite, op.h,
+                                                   capa.solape_empalme, len(empalmes))
+                if not nuevos:
+                    break
+                empalmes += nuevos
+                piezas = self._piezas(res, empalmes, cons, op)
         rc = ResultadoCapa(capa.nombre, res, piezas, neto, phi_r, empalmes)
         rc.resumen = self._resumen(capa, rc)
         self.resultados[capa.nombre] = rc
         return rc
+
+    def _piezas(self, res, empalmes, cons, op):
+        """Divide la capa por los empalmes y drapea cada pieza por separado (con su propia
+        semilla en el centro de la pieza y la dirección de fibra que tenía allí la capa entera):
+        así un empalme alivia la cizalla igual que en el taller."""
+        if not empalmes:
+            return [res]
+        piezas = _dividir_con_phi(res, empalmes)
+        if len(piezas) <= 1:
+            return piezas
+        ea, _ = res.fibras()
+        cr = Consultor(res.malla)
+        out = []
+        for pz in piezas:
+            try:
+                d = fast_marching(pz.malla, pz.malla.boundary_vertices_mask)
+                d = np.where(np.isfinite(d), d, 0.0)
+                cand = np.nonzero(d >= 0.7 * d.max())[0]
+                cg = (pz.malla.face_centroids * pz.malla.face_areas[:, None]).sum(0) / pz.malla.area
+                sd = pz.malla.V[cand[int(np.argmin(np.linalg.norm(pz.malla.V[cand] - cg, axis=1)))]]
+                _, f, _, _ = cr.mas_cercano(sd[None])
+                rp = simular_capa(pz.malla, cons, sd, ea[f[0]], op)
+                rp.phi_neto = pz.phi_neto[rp.origen_vertice] if rp.origen_vertice is not None else pz.phi_neto
+                rp.redrapeada = True
+                out.append(rp)
+            except Exception:  # noqa: BLE001
+                out.append(pz)
+        return out
 
     def simular_todas(self, progreso=None):
         for k, c in enumerate(self.capas):
@@ -336,6 +440,22 @@ class Proyecto:
         r = rc.drapeado
         neto = rc.phi_neto[r.malla.F].mean(1) <= 1e-9
         s = r.resumen(mat.cizalla_aviso, mat.cizalla_limite, neto)
+        if len(rc.piezas) > 1 and any(getattr(pz, "redrapeada", False) for pz in rc.piezas):
+            # con piezas drapeadas por separado, la producibilidad es la de las piezas
+            g_l, a_l, c_l = [], [], []
+            for pz in rc.piezas:
+                nz = pz.phi_neto[pz.malla.F].mean(1) <= 1e-9
+                g_l.append(np.abs(pz.cizalla())[nz])
+                a_l.append(pz.malla.face_areas[nz])
+                c_l.append(pz.cara_cubierta()[nz])
+            g, A, cub = np.concatenate(g_l), np.concatenate(a_l), np.concatenate(c_l)
+            if len(g):
+                s.update({"cizalla_max": float(g.max()), "cizalla_media": float(np.average(g, weights=A)),
+                          "cubierto_%": float(100 * A[cub].sum() / A.sum()),
+                          "area_aviso_%": float(100 * A[g > mat.cizalla_aviso].sum() / A.sum()),
+                          "area_limite_%": float(100 * A[g > mat.cizalla_limite].sum() / A.sum())})
+        s["solape_patron_%"] = float(100 * sum(pz.solape_plano() for pz in rc.piezas)
+                                     / max(sum(pz.area_plana() for pz in rc.piezas), 1e-300))
         neto_area = rc.neto.area
         area_corte = sum(p.area_plana() for p in rc.piezas)
         s.update({
@@ -345,7 +465,8 @@ class Proyecto:
             "piezas": len(rc.piezas), "empalmes": len(rc.empalmes),
             # ROJO: cizalla por encima del límite o zonas que el tejido no alcanza (> 2 %)
             # AMARILLO: cizalla por encima del aviso o pequeñas zonas no alcanzadas (bordes)
-            "estado": ("ROJO" if s.get("area_limite_%", 0) > 0.5 or s["cubierto_%"] < 98.0 else
+            "estado": ("ROJO" if s.get("area_limite_%", 0) > 0.5 or s["cubierto_%"] < 98.0
+                       or s.get("solape_patron_%", 0) > 0.5 else
                        "AMARILLO" if s.get("area_aviso_%", 0) > 0.5 or s["cubierto_%"] < 99.5 else "VERDE"),
         })
         return s
@@ -365,9 +486,8 @@ class Proyecto:
             if d[0] > tol:
                 continue
             # ángulo real en la cara del drapeado más cercana
-            r = rc.drapeado
-            cr = Consultor(r.malla)
-            _, fr, _, _ = cr.mas_cercano(Q)
+            rs, fr = rc.localizar(Q)
+            r = rs[0]
             n = r.malla.face_normals[fr]
             ros = self.rosetas.get(c.roseta) or next(iter(self.rosetas.values()))
             ref = ros.direccion(Q, n, 0.0)
@@ -459,6 +579,31 @@ class Proyecto:
         p.nucleos = [Nucleo(**{**n, "contorno": Contorno(**n["contorno"])}) for n in d.get("nucleos", [])]
         p.ruta = ruta
         return p
+
+
+def _plano_si_plano(m: TriMesh, margen: float):
+    """Si la malla es plana (desviación < 0,05 mm + 1e-4·tamaño) devuelve una malla rectangular
+    de ese plano que la cubre con ``margen``; si no, None."""
+    c = m.V.mean(0)
+    _, sv, vt = np.linalg.svd(m.V - c, full_matrices=False)
+    n = vt[2]
+    diag = float(np.linalg.norm(np.ptp(m.V, axis=0)))
+    if np.abs((m.V - c) @ n).max() > 0.05 + 1e-4 * diag:
+        return None
+    e1, e2 = vt[0], vt[1]
+    if (np.cross(e1, e2) @ m.face_normals.mean(0)) < 0:
+        e2 = -e2
+    u = (m.V - c) @ e1
+    v = (m.V - c) @ e2
+    paso = max(float(np.median(m.edge_lengths)), 1e-3)
+    us = np.arange(u.min() - margen, u.max() + margen + paso, paso)
+    vs = np.arange(v.min() - margen, v.max() + margen + paso, paso)
+    U, W = np.meshgrid(us, vs, indexing="ij")
+    P = c + U[..., None] * e1 + W[..., None] * e2
+    nu, nv = U.shape
+    idx = np.arange(nu * nv).reshape(nu, nv)
+    a, b, cc, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+    return TriMesh(P.reshape(-1, 3), np.vstack([np.c_[a, b, cc], np.c_[a, cc, d]]))
 
 
 def _curvatura_p95(m: TriMesh) -> float:

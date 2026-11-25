@@ -207,3 +207,48 @@ def extender_superficie(m: TriMesh, distancia: float, anillos: int | None = None
             Fs.append(np.where(corta1[:, None], np.stack([a1, b, b1], 1), np.stack([a, b, b1], 1)))
         del base, nprev
     return TriMesh(V, np.vstack(Fs))
+
+
+def rellenar_agujeros(m: TriMesh) -> TriMesh:
+    """Tapa los agujeros interiores (bucles de borde que no son el contorno exterior de su panel)
+    para que la red de tejido pueda pasar por encima; el agujero se recorta después igual que
+    el resto del contorno. Cada tapa se hace con dos anillos concéntricos y un abanico."""
+    nc, etiqueta = m.componentes()
+    bucles = m.boundary_loops()
+    if len(bucles) <= 1:
+        return m
+    vc = m.vertice_caras.tocsr()
+    comp_bucle = []
+    for b in bucles:
+        caras = vc.indices[vc.indptr[b[0]]:vc.indptr[b[0] + 1]]
+        comp_bucle.append(etiqueta[caras[0]] if len(caras) else -1)
+    perim = [float(np.linalg.norm(np.diff(m.V[np.r_[b, b[:1]]], axis=0), axis=1).sum()) for b in bucles]
+    V = [m.V]
+    F = [m.F]
+    n = m.nv
+    for c in set(comp_bucle):
+        idx = [k for k in range(len(bucles)) if comp_bucle[k] == c]
+        if len(idx) <= 1:
+            continue
+        exterior = max(idx, key=lambda k: perim[k])
+        for k in idx:
+            if k == exterior:
+                continue
+            b = bucles[k]
+            P = m.V[b]
+            cen = P.mean(0)
+            anillo = cen + 0.5 * (P - cen)
+            nb = len(b)
+            ids_an = np.arange(n, n + nb)
+            id_c = n + nb
+            V += [anillo, cen[None]]
+            n += nb + 1
+            b1 = np.roll(b, -1)
+            a1 = np.roll(ids_an, -1)
+            # el borde (b -> b1) va en el sentido de las caras vecinas: las tapas lo recorren al revés
+            F.append(np.stack([b1, b, ids_an], 1))
+            F.append(np.stack([b1, ids_an, a1], 1))
+            F.append(np.stack([a1, ids_an, np.full(nb, id_c)], 1))
+    if len(V) == 1:
+        return m
+    return TriMesh(np.vstack(V), np.vstack(F))

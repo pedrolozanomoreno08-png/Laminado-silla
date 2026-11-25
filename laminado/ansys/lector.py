@@ -35,6 +35,7 @@ class Molde:
     unidades: str = "mm"
     id_elemento: np.ndarray | None = None      # id de elemento Ansys de cada cara (para exportar)
     notas: list[str] = field(default_factory=list)
+    rosetas: list = field(default_factory=list)   # [(nombre, origen, eje 1, eje 2)] en mm (de ACP)
 
 
 # --------------------------------------------------------------------------- MAPDL
@@ -61,6 +62,17 @@ def _cortar(linea: str, anchos):
             break
         vals.append(trozo)
     return vals
+
+
+def _es_dato(linea: str, negativos: bool = False) -> bool:
+    """True si la línea es de datos de un bloque (empieza por un número, no por un comando)."""
+    t = linea.strip()
+    if not t:
+        return False
+    if t[0].isdigit():
+        return True
+    # en CMBLOCK los rangos se escriben como números negativos (p.ej. "-120")
+    return negativos and t[0] == "-" and t[1:2].isdigit() and t != "-1"
 
 
 def _num(s):
@@ -106,7 +118,11 @@ def leer_mapdl(ruta: str) -> Molde:
             i += 2
             while i < n:
                 L = lineas[i]
-                if L.strip().startswith("-1") or L.strip().upper().startswith("N,R5") or not L.strip():
+                if not _es_dato(L):
+                    # fin del bloque: "-1" se consume; un comando (N,UNBL,LOC / /com / EBLOCK…)
+                    # se deja para que lo procese el bucle principal
+                    if not L.strip().startswith("-1"):
+                        i -= 1
                     break
                 v = _cortar(L, anchos)
                 nid = int(v[0])
@@ -120,7 +136,9 @@ def leer_mapdl(ruta: str) -> Molde:
             i += 2
             while i < n:
                 L = lineas[i]
-                if L.strip().startswith("-1") or not L.strip():
+                if not _es_dato(L):
+                    if not L.strip().startswith("-1"):
+                        i -= 1
                     break
                 v = [int(x) for x in _cortar(L, anchos)]
                 if solido:
@@ -147,7 +165,7 @@ def leer_mapdl(ruta: str) -> Molde:
             anchos = _anchos(fmt)
             i += 2
             vals = []
-            while len(vals) < cuantos and i < n:
+            while len(vals) < cuantos and i < n and _es_dato(lineas[i], negativos=True):
                 vals += [int(x) for x in _cortar(lineas[i], anchos)]
                 i += 1
             i -= 1
@@ -299,6 +317,80 @@ def leer_rst(ruta: str) -> Molde:
     return _ensamblar(ids_n, coords, elementos, tipos, comps, unidades, ruta)
 
 
+# --------------------------------------------------------------------------- HDF5 (ACP)
+_UNIDADES_LONGITUD = {"m": "si", "mm": "mpa", "cm": "cgs", "in": "bin", "ft": "bft", "um": None}
+
+
+def leer_h5_cae(ruta: str, ruta_acph5: str | None = None) -> Molde:
+    """Malla del formato abierto «composite_cae» (HDF5) que Workbench escribe para ACP
+    (``dp0/ACP-Pre/MECH/*.h5`` o ``ACPCompositeDefinitions.h5``). Si se da el modelo de ACP
+    (``*.acph5``) se leen además sus conjuntos de elementos y rosetas."""
+    import h5py
+    with h5py.File(ruta, "r") as h:
+        raiz = h["composite_cae"]
+        unidad = raiz.attrs.get("Length_Unit", [b"m"])[0]
+        unidad = unidad.decode() if isinstance(unidad, bytes) else str(unidad)
+        ids_n, coords, elementos, tipos = [], [], [], {}
+        claves_et = {}
+        # Index_Base = 0: los nodos de cada elemento son posiciones en Node_Labels (no etiquetas)
+        base_idx = int(np.asarray(raiz.attrs.get("Index_Base", [1])).ravel()[0])
+        for nm in raiz["Meshes"]:
+            M = raiz["Meshes"][nm]
+            etiquetas_n = np.asarray(M["Node_Labels"]).ravel()
+            ids_n.append(etiquetas_n)
+            coords.append(np.asarray(M["Node_Locations"], float).reshape(-1, 3))
+            eids = np.asarray(M["Element_Labels"]).ravel()
+            nodos_e = np.asarray(M["Element_Nodes"]).ravel()
+            tipos_e = np.asarray(M["Element_Types"]).ravel()
+            for eid, nd, ref in zip(eids, nodos_e, tipos_e):
+                g = h[ref]
+                clave = g.name
+                if clave not in claves_et:
+                    k = len(claves_et) + 1
+                    claves_et[clave] = k
+                    t = g.attrs.get("MADPL_Type", g.attrs.get("MAPDL_Type", [b"181"]))[0]
+                    t = t.decode() if isinstance(t, bytes) else str(t)
+                    try:
+                        tipos[k] = int(re.sub(r"\D", "", t) or 181)
+                    except ValueError:
+                        tipos[k] = 181
+                    esquinas = int(g.attrs.get("Corner_Node_Count", [len(nd)])[0])
+                    claves_et[clave] = (k, esquinas)
+                k, esquinas = claves_et[clave] if isinstance(claves_et[clave], tuple) else (claves_et[clave], len(nd))
+                nd = np.asarray(nd).ravel()[:esquinas].astype(int)
+                if base_idx == 0:
+                    nd = etiquetas_n[nd]
+                elementos.append((int(eid), k, [int(x) for x in nd]))
+    ids_n = np.concatenate(ids_n)
+    coords = np.vstack(coords)
+    comps = {}
+    rosetas = []
+    if ruta_acph5:
+        try:
+            with h5py.File(ruta_acph5, "r") as a:
+                base = "ACP/Definition/VertexProperties/"
+
+                def texto(x):
+                    return x.decode() if isinstance(x, bytes) else str(x)
+                if base + "ElementSet" in a:
+                    es = a[base + "ElementSet"]
+                    for nombre, etiquetas in zip(es["name"][:], es["element_labels"][:, 0]):
+                        et = np.asarray(etiquetas).ravel()
+                        if len(et):
+                            comps[(texto(nombre), "ELEM")] = et.astype(int)
+                if base + "Rosette" in a:
+                    r = a[base + "Rosette"]
+                    for nombre, o, d1, d2 in zip(r["name"][:], r["origin"][:], r["dir1"][:], r["dir2"][:]):
+                        rosetas.append((texto(nombre), np.asarray(o, float), np.asarray(d1, float), np.asarray(d2, float)))
+        except Exception:  # noqa: BLE001
+            pass
+    molde = _ensamblar(ids_n, coords, elementos, tipos, comps, _UNIDADES_LONGITUD.get(unidad, None), ruta)
+    f = {"si": 1000.0, "cgs": 10.0, "bin": 25.4, "bft": 304.8}.get(_UNIDADES_LONGITUD.get(unidad, ""), 1.0)
+    molde.rosetas = [(n, o * f, d1, d2) for n, o, d1, d2 in rosetas]
+    molde.notas.append(f"Malla leída del modelo de composites de Workbench (HDF5, unidades: {unidad}).")
+    return molde
+
+
 # --------------------------------------------------------------------------- otros
 def leer_malla_generica(ruta: str) -> Molde:
     import pyvista as pv
@@ -362,6 +454,12 @@ def _buscar_en_wbpz(ruta: str, destino: str):
                 prioridad.append((1, nm))
             elif b.endswith(".dat") and "mech" in b:
                 prioridad.append((2, nm))
+            elif b.endswith(".h5") and "/mech/" in b:
+                prioridad.append((2.5, nm))
+            elif b.endswith("acpcompositedefinitions.h5"):
+                prioridad.append((2.6, nm))
+            elif b.endswith(".acph5") and "/acp/" in b:
+                prioridad.append((9, nm))          # sólo como complemento (zonas y rosetas)
             elif b.endswith(".rst"):
                 prioridad.append((3, nm))
             elif b.endswith((".stp", ".step", ".igs", ".iges")):
@@ -379,19 +477,30 @@ def _buscar_en_wbpz(ruta: str, destino: str):
 def leer_wbpz(ruta: str) -> Molde:
     tmp = tempfile.mkdtemp(prefix="wbpz_")
     candidatos, nombres = _buscar_en_wbpz(ruta, tmp)
+    acph5 = next((c for c in candidatos if c.lower().endswith(".acph5")), None)
     errores = []
     for c in candidatos:
+        if c.lower().endswith(".acph5"):
+            continue
         try:
-            m = abrir_molde(c)
+            m = leer_h5_cae(c, acph5) if c.lower().endswith(".h5") else abrir_molde(c)
             m.origen = f"{os.path.basename(ruta)} → {os.path.relpath(c, tmp)}"
             return m
         except Exception as e:
             errores.append(f"{os.path.basename(c)}: {e}")
+    tiene_mechdb = any(n.lower().endswith(".mechdb") for n in nombres)
     raise ValueError(
-        "El .wbpz no contiene una malla legible (ds.dat, .cdb, .rst, STEP o STL).\n"
-        "En Mechanical: con el modelo mallado, botón derecho en 'Solution' → 'Write Input File' "
-        "o resuelve una vez y vuelve a archivar el proyecto.\n"
-        + ("Detalles: " + "; ".join(errores) if errores else f"Archivos: {len(nombres)}"))
+        "Este .wbpz no incluye la malla en un formato abierto"
+        + (" (sólo la base de datos interna de Mechanical, .mechdb, que no se puede leer fuera de Ansys)"
+           if tiene_mechdb else "") + ".\n\n"
+        "Cualquiera de estas opciones lo resuelve:\n"
+        "  1. En Mechanical, con el modelo mallado: clic derecho en «Solution» → «Write Input File…» y "
+        "abre aquí ese archivo .dat (o archiva de nuevo el proyecto: el .dat irá dentro del .wbpz).\n"
+        "  2. Si usas ACP: abre el sistema ACP (Pre) una vez y vuelve a archivar; el .wbpz incluirá la "
+        "malla del modelo de composites, que sí se puede leer.\n"
+        "  3. Exporta la geometría de la pieza como STEP desde SpaceClaim/DesignModeler (Archivo → "
+        "Guardar como → STEP) y ábrela aquí.\n"
+        + ("Detalles: " + "; ".join(errores) if errores else f"(archivos en el proyecto: {len(nombres)})"))
 
 
 def abrir_molde(ruta: str, tam_elemento: float = 5.0) -> Molde:
@@ -402,6 +511,8 @@ def abrir_molde(ruta: str, tam_elemento: float = 5.0) -> Molde:
         return leer_mapdl(ruta)
     if ext in (".rst", ".rth", ".rmg"):
         return leer_rst(ruta)
+    if ext == ".h5":
+        return leer_h5_cae(ruta)
     if ext in (".step", ".stp", ".iges", ".igs", ".brep"):
         return leer_cad(ruta, tam_elemento)
     return leer_malla_generica(ruta)

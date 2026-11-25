@@ -77,7 +77,7 @@ def drapear_energia(m: TriMesh, uv0, semilla_v: int, dir_semilla, k_t=200.0, k_s
         det = gu[:, 0] * gv[:, 1] - gu[:, 1] * gv[:, 0]
         nu = np.linalg.norm(gu, axis=1)
         nvv = np.linalg.norm(gv, axis=1)
-        cs = (gu * gv).sum(1) / np.maximum(nu * nvv, 1e-300)
+        cs = (gu * gv).sum(1) / np.maximum(nu * nvv, 1e-24)
         r = [st * w * (nvv - det), stt * w * (nu - det), ss * w * cs,
              W * uv[semilla_v], [W * (gv[fs] @ dloc)]]
         if len(fijos):
@@ -86,8 +86,8 @@ def drapear_energia(m: TriMesh, uv0, semilla_v: int, dir_semilla, k_t=200.0, k_s
 
     def jac(x):
         uv, gu, gv = grads(x)
-        nu = np.maximum(np.linalg.norm(gu, axis=1), 1e-300)
-        nvv = np.maximum(np.linalg.norm(gv, axis=1), 1e-300)
+        nu = np.maximum(np.linalg.norm(gu, axis=1), 1e-12)
+        nvv = np.maximum(np.linalg.norm(gv, axis=1), 1e-12)
         p = (gu * gv).sum(1)
         s = p / (nu * nvv)
         filas, cols, vals = [], [], []
@@ -138,11 +138,17 @@ def drapear_energia(m: TriMesh, uv0, semilla_v: int, dir_semilla, k_t=200.0, k_s
         g = J.T @ r
         diag = JtJ.diagonal()
         mejora = False
+        if not (np.isfinite(JtJ.data).all() and np.isfinite(g).all()):
+            estado = "detenido (valores no finitos)"
+            break
         for _ in range(12):
             A = (JtJ + sp.diags(lam * np.maximum(diag, 1e-9 * diag.max()))).tocsc()
             try:
                 dx = spla.spsolve(A, -g)
             except RuntimeError:
+                lam *= 10
+                continue
+            if not np.isfinite(dx).all():
                 lam *= 10
                 continue
             xn = x + dx

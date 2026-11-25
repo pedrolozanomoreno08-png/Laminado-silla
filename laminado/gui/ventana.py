@@ -448,9 +448,16 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
             if modo == "Ángulo de fibra":
                 ros = self.p.rosetas.get(capa.roseta) or next(iter(self.p.rosetas.values()))
                 ref = ros.direccion(r.malla.face_centroids, r.malla.face_normals, 0.0)
-            v.capa(r, {"Producibilidad": "producibilidad", "Cizalla": "cizalla",
-                       "Ángulo de fibra": "desviacion"}[modo], mat.cizalla_aviso, mat.cizalla_limite,
-                   rc.phi_neto, ref)
+            modo_v = {"Producibilidad": "producibilidad", "Cizalla": "cizalla", "Ángulo de fibra": "desviacion"}[modo]
+            redr = [pz for pz in rc.piezas if getattr(pz, "redrapeada", False)]
+            if redr:
+                # piezas empalmadas drapeadas por separado: se dibuja cada una con su resultado
+                ros = self.p.rosetas.get(capa.roseta) or next(iter(self.p.rosetas.values()))
+                for k, pz in enumerate(redr):
+                    rf = ros.direccion(pz.malla.face_centroids, pz.malla.face_normals, 0.0) if ref is not None else None
+                    v.capa(pz, modo_v, mat.cizalla_aviso, mat.cizalla_limite, pz.phi_neto, rf, nombre=f"capa_{k}")
+            else:
+                v.capa(r, modo_v, mat.cizalla_aviso, mat.cizalla_limite, rc.phi_neto, ref)
             v.lineas("borde", [rc.neto.V[b] + rc.neto.vertex_normals[b] * 0.6 for b in rc.neto.boundary_loops()],
                      "k", 3, True)
             if r.darts:

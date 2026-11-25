@@ -49,14 +49,14 @@ class Vista3D(QtCore.QObject):
                                                   smooth_shading=True, specular=0.2, name="molde",
                                                   pickable=True, render=False))
 
-    def capa(self, res, modo, aviso, limite, phi_neto=None, ref=None):
+    def capa(self, res, modo, aviso, limite, phi_neto=None, ref=None, nombre="capa"):
         """Dibuja el resultado de drapeado coloreado según ``modo``."""
         m = res.malla
         pd = a_pv(m)
         # pequeño desplazamiento según la normal para que la capa se vea sobre el molde
         pd.points = m.V + m.vertex_normals * 0.3
         g = np.abs(res.cizalla())
-        kw = dict(name="capa", pickable=False, render=False, smooth_shading=False, show_edges=False)
+        kw = dict(name=nombre, pickable=False, render=False, smooth_shading=False, show_edges=False)
         if modo == "producibilidad":
             col = (color_producibilidad(g, aviso, limite)[:, :3] * 255).astype(np.uint8)
             if phi_neto is not None:
@@ -76,7 +76,7 @@ class Vista3D(QtCore.QObject):
                                           scalar_bar_args={"title": "Ángulo de urdimbre (°)", "vertical": True})
         else:
             actor = self.plotter.add_mesh(pd, color="#4a78c2", **kw)
-        self.poner("capa", actor)
+        self.poner(nombre, actor)
 
     def lineas(self, nombre, polilineas, color="k", ancho=3, cerrada=False):
         self.quitar(nombre)

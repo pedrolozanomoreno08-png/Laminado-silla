@@ -91,12 +91,29 @@ class TriMesh:
         primero = np.r_[True, inv_s[1:] != inv_s[:-1]]
         ef[inv_s[primero], 0] = car_s[primero]
         seg = ~primero
-        ef[inv_s[seg], 1] = car_s[seg]
+        # (en aristas no variedad —uniones en T de un ensamblaje— hay más de dos caras; aquí sólo
+        # se guardan dos y ``edge_count`` dice cuántas hay en realidad)
+        seg_idx = np.nonzero(seg)[0]
+        ya = np.zeros(len(uniq), bool)
+        for k in seg_idx:
+            e = inv_s[k]
+            if not ya[e]:
+                ef[e, 1] = car_s[k]
+                ya[e] = True
         return uniq, fe, ef
 
     @property
     def edges(self) -> np.ndarray:
         return self._aristas[0]
+
+    @cached_property
+    def edge_count(self) -> np.ndarray:
+        """Número de caras de cada arista (1 borde, 2 interior, >2 unión en T no variedad)."""
+        return np.bincount(self.face_edges.ravel(), minlength=len(self.edges))
+
+    @property
+    def manifold_edges_mask(self) -> np.ndarray:
+        return self.edge_count == 2
 
     @property
     def face_edges(self) -> np.ndarray:
@@ -113,7 +130,7 @@ class TriMesh:
 
     @cached_property
     def boundary_edges_mask(self) -> np.ndarray:
-        return self.edge_faces[:, 1] < 0
+        return self.edge_count == 1
 
     @cached_property
     def boundary_vertices_mask(self) -> np.ndarray:
@@ -138,14 +155,16 @@ class TriMesh:
                              shape=(self.nv, self.nf))
 
     def boundary_loops(self) -> list[np.ndarray]:
-        """Bucles de borde orientados como las caras (lista de arrays de vértices)."""
+        """Bucles de borde orientados como las caras (lista de arrays de vértices).
+
+        Sólo cuentan las aristas con una única cara (las uniones en T no son borde)."""
         F = self.F
+        fe = self.face_edges
+        borde = self.boundary_edges_mask
         siguiente = {}
-        # arista dirigida (a->b) de cada cara; es de borde si (b->a) no existe
-        dirigidas = np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
-        clave = set(map(tuple, dirigidas.tolist()))
-        for a, b in dirigidas.tolist():
-            if (b, a) not in clave:
+        for k, (a_, b_) in enumerate(((0, 1), (1, 2), (2, 0))):
+            caras = np.nonzero(borde[fe[:, k]])[0]
+            for a, b in zip(F[caras, a_].tolist(), F[caras, b_].tolist()):
                 siguiente.setdefault(a, []).append(b)
         bucles = []
         usados = set()
@@ -171,9 +190,10 @@ class TriMesh:
         return bucles
 
     def componentes(self):
-        """(número, etiqueta por cara) de componentes conexas por aristas."""
+        """(número, etiqueta por cara) de componentes conexas por aristas de variedad (una unión
+        en T separa paneles distintos de un ensamblaje)."""
         ef = self.edge_faces
-        ok = ef[:, 1] >= 0
+        ok = (ef[:, 1] >= 0) & self.manifold_edges_mask
         A = sp.coo_matrix((np.ones(ok.sum()), (ef[ok, 0], ef[ok, 1])), shape=(self.nf, self.nf))
         from scipy.sparse.csgraph import connected_components
         return connected_components(A, directed=False)
@@ -195,6 +215,7 @@ class TriMesh:
         ef = self.edge_faces
         fe = self.face_edges
         visit = np.zeros(self.nf, bool)
+        variedad = self.manifold_edges_mask
         from collections import deque
         for s in range(self.nf):
             if visit[s]:
@@ -204,6 +225,8 @@ class TriMesh:
             while q:
                 f = q.popleft()
                 for e in fe[f]:
+                    if not variedad[e]:
+                        continue            # unión en T: cada panel se orienta por separado
                     for g in ef[e]:
                         if g < 0 or g == f or visit[g]:
                             continue

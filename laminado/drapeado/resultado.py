@@ -275,6 +275,24 @@ class ResultadoDrapeado:
         u2 = uv[F[:, 2]] - uv[F[:, 0]]
         return float(0.5 * np.abs(u1[:, 0] * u2[:, 1] - u1[:, 1] * u2[:, 0]).sum())
 
+    def solape_plano(self, mascara=None):
+        """Área (mm²) en la que el patrón plano se superpone consigo mismo: tela que haría falta
+        dos veces en el mismo sitio del plano (p.ej. un dart en una zona en silla de montar, donde
+        los bordes del corte se cruzan en vez de abrirse). Un patrón así no se puede cortar de una
+        sola pieza."""
+        from shapely import polygons, union_all
+        uv, F = self.uv, self.malla.F
+        if mascara is not None:
+            F = F[mascara]
+        T = uv[F]
+        a = 0.5 * np.abs((T[:, 1, 0] - T[:, 0, 0]) * (T[:, 2, 1] - T[:, 0, 1])
+                         - (T[:, 2, 0] - T[:, 0, 0]) * (T[:, 1, 1] - T[:, 0, 1]))
+        ok = a > 1e-9
+        if not ok.any():
+            return 0.0
+        u = union_all(polygons(T[ok])).area
+        return float(max(0.0, a[ok].sum() - u))
+
     def resumen(self, aviso=None, limite=None, mascara=None):
         """Estadísticas de producibilidad (sobre las caras de ``mascara`` si se da, p.ej. el neto)."""
         g = np.abs(self.cizalla())
@@ -290,6 +308,7 @@ class ResultadoDrapeado:
             "area_plana_mm2": self.area_plana(),
             "cubierto_%": float(100 * A[cub].sum() / max(A.sum(), 1e-300)),
             "n_darts": len(self.darts),
+            "solape_patron_%": float(100 * self.solape_plano() / max(self.area_plana(), 1e-300)),
         }
         if aviso is not None:
             out["area_aviso_%"] = float(100 * A[g > aviso].sum() / A.sum())

@@ -193,18 +193,45 @@ def proponer_darts(res: ResultadoDrapeado, semilla, limite: float, aviso: float,
     return darts
 
 
+def _solape_cerca(res, dart, radio):
+    """Solape del patrón plano en el entorno de un dart (mm²)."""
+    from scipy.spatial import cKDTree
+    d, _ = cKDTree(np.asarray(dart.puntos)).query(res.malla.face_centroids)
+    return res.solape_plano(d < radio)
+
+
 def simular_con_darts_auto(malla_capa, consultor, semilla, direccion, opciones, limite, aviso,
                            darts=None, n_max=6, iter_max=3):
+    """Añade darts automáticos donde la cizalla supera el límite.
+
+    Sólo se conservan los darts que se abren en V en el patrón plano: en zonas en silla de
+    montar los bordes del corte se cruzarían (sobra tela en vez de faltar) y el dart no sirve;
+    ahí hace falta un empalme o dividir la capa."""
     darts = list(darts or [])
     res = simular_capa(malla_capa, consultor, semilla, direccion, opciones, darts)
+    descartados = []
     for _ in range(iter_max):
-        nuevos = proponer_darts(res, semilla, limite, aviso, n_max - len(darts), opciones.h, darts)
+        nuevos = proponer_darts(res, semilla, limite, aviso, n_max - len(darts), opciones.h, darts + descartados)
         if not nuevos:
             break
-        darts += nuevos
-        res = simular_capa(malla_capa, consultor, semilla, direccion, opciones, darts)
+        prueba = simular_capa(malla_capa, consultor, semilla, direccion, opciones, darts + nuevos)
+        utiles = []
+        for d in nuevos:
+            # el solape aceptable en el entorno del dart: el que ya había sin él
+            antes = _solape_cerca(res, d, 4 * opciones.h)
+            despues = _solape_cerca(prueba, d, 4 * opciones.h)
+            if despues <= antes + 0.5 * opciones.h ** 2:
+                utiles.append(d)
+            else:
+                descartados.append(d)
+        if not utiles:
+            break
+        darts += utiles
+        res = prueba if len(utiles) == len(nuevos) else simular_capa(malla_capa, consultor, semilla,
+                                                                         direccion, opciones, darts)
         if len(darts) >= n_max:
             break
+    res.info["darts_descartados_por_solape"] = len(descartados)
     return res
 
 
@@ -275,3 +302,38 @@ def empalmes_por_ancho(res: ResultadoDrapeado, ancho_rollo: float, solape: float
     paso = (hi - lo) / n
     return [Empalme("trama", valor=lo + k * paso, solape=solape, nombre=f"Empalme auto {k}",
                     automatico=True) for k in range(1, n)]
+
+
+def proponer_empalmes_cizalla(piezas, semilla, limite, h, solape=15.0, n_existentes=0, n_max=4):
+    """Empalmes que separan las zonas con cizalla por encima del límite de la semilla de su
+    pieza: cada zona queda en una pieza nueva que se drapea desde su propio centro (el camino
+    del tejido es más corto y la cizalla acumulada, menor). Es la solución para zonas en silla
+    de montar, donde un dart no sirve."""
+    from ..geom.malla import TriMesh  # noqa: F401
+    propuestas = []
+    for pz in piezas:
+        g = np.abs(pz.cizalla())
+        phi = getattr(pz, "phi_neto", None)
+        nz = (phi[pz.malla.F].mean(1) <= 1e-9) if phi is not None else np.ones(pz.malla.nf, bool)
+        altas = (g > limite) & nz
+        if not altas.any():
+            continue
+        sub, _, caras = pz.malla.submalla(altas)
+        nc, et = sub.componentes()
+        S = pz.malla.V[int(np.argmin(np.linalg.norm(pz.uv, axis=1)))]
+        zonas = sorted(range(nc), key=lambda c: -pz.malla.face_areas[caras[et == c]].sum())
+        for c in zonas:
+            fz = caras[et == c]
+            A = pz.malla.face_areas[fz]
+            if A.sum() < 25 * h * h:
+                continue
+            Z = (pz.malla.face_centroids[fz] * A[:, None]).sum(0) / A.sum()
+            d = Z - S
+            L = np.linalg.norm(d)
+            if L < 6 * h:
+                continue
+            propuestas.append((A.sum(), Empalme("plano", tuple(S + 0.5 * d), tuple(d / L), solape=solape,
+                                                nombre=f"Empalme por cizalla {n_existentes + len(propuestas) + 1}",
+                                                automatico=True)))
+    propuestas.sort(key=lambda t: -t[0])
+    return [e for _, e in propuestas[:n_max]]

@@ -271,7 +271,9 @@ class PanelCapa(PanelBase):
         bd.clicked.connect(lambda: self.picar.emit("dart"))
         bb = QtWidgets.QPushButton("Borrar darts manuales")
         bb.clicked.connect(self._borrar_darts)
-        self.darts_auto = self._conectar(QtWidgets.QCheckBox("Darts automáticos donde la cizalla supera el límite"), "drapeado")
+        self.darts_auto = self._conectar(QtWidgets.QCheckBox("Darts automáticos donde la cizalla supera el límite\n"
+                                                             "(sólo los que abren en V; en zonas en silla usa empalmes)"),
+                                         "drapeado")
         self.darts_auto.setChecked(capa.darts_auto)
         fl.addRow(self.lab_darts, bd)
         fl.addRow("", bb)
@@ -288,7 +290,11 @@ class PanelCapa(PanelBase):
         be.clicked.connect(lambda: self.picar.emit("empalme"))
         be2 = QtWidgets.QPushButton("Borrar empalmes manuales")
         be2.clicked.connect(self._borrar_emp)
+        self.emp_ciz = self._conectar(QtWidgets.QCheckBox("Automáticos donde la cizalla supera el límite\n"
+                                                          "(piezas drapeadas por separado)"), "drapeado")
+        self.emp_ciz.setChecked(capa.empalmes_auto_cizalla)
         fl.addRow("", self.emp_auto)
+        fl.addRow("", self.emp_ciz)
         fl.addRow("Solape (− = hueco)", self.solape)
         fl.addRow(self.lab_emp, be)
         fl.addRow("", be2)
@@ -338,6 +344,7 @@ class PanelCapa(PanelBase):
         c.h = self.h.value()
         c.darts_auto = self.darts_auto.isChecked()
         c.empalme_auto = self.emp_auto.isChecked()
+        c.empalmes_auto_cizalla = self.emp_ciz.isChecked()
         c.solape_empalme = self.solape.value()
         c.notas = self.notas.text()
         c.activa = self.activa.isChecked()
@@ -404,3 +411,4 @@ class PanelProyecto(PanelBase):
         if self.ext.value() != self.p.extension:
             self.p.extension = self.ext.value()
             self.p._ext = None
+            self.p._superficies = {}
