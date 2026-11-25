@@ -66,3 +66,31 @@ def test_cobertura_completa_nudo_en_t():
     assert (n[izq] >= 1).all()
     # solape entre parches contiguos (no a tope)
     assert m.face_areas[n >= 2].sum() > 0
+
+
+def test_exceso_en_borde_libre_cubre_el_borde():
+    """Una capa por selección que llega al borde libre del molde: con exceso de borde el tejido
+    sigue por la superficie extendida y el borde queda cubierto del todo (sin rendijas)."""
+    from laminado.modelo.proyecto import Capa, Contorno
+    n, R = 60, 60.0
+    th, x = np.meshgrid(np.linspace(0, np.pi, n), np.linspace(0, 200, n), indexing="ij")
+    V = np.c_[x.ravel(), R * np.cos(th).ravel(), R * np.sin(th).ravel()]
+    idx = np.arange(n * n).reshape(n, n)
+    a, b, c, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+    m = TriMesh(V, np.vstack([np.c_[a, b, c], np.c_[a, c, d]]))
+    sel = np.nonzero(m.face_centroids[:, 0] < 120)[0]            # toca tres bordes libres
+    p = Proyecto("borde")
+    p.cargar_molde(Molde(m, {"S": sel}, origen="prueba"))
+    p.h = 4.0
+    # con el borde suavizado (como en los parches de cobertura): sin exceso de borde quedaban
+    # rendijas en las esquinas donde el borde de la selección llega al borde libre
+    cap = Capa("P1", MAT, 0, contorno=Contorno("seleccion", ["S"], exceso_borde=5.0, suavizado=4.0))
+    cap.empalme_auto = False
+    p.capas = [cap]
+    p.simular("P1")
+    n_cub = mapa_cobertura(p)
+    borde_libre = sel[m.face_centroids[sel, 0] < 115]      # lejos del borde interior (x = 120)
+    assert (n_cub[borde_libre] > 0).all()
+    # el tejido no invade el resto del molde más allá de una celda
+    otras = np.setdiff1d(np.arange(m.nf), sel)
+    assert m.face_areas[otras][n_cub[otras] > 0].sum() < 0.03 * m.face_areas[sel].sum()

@@ -310,12 +310,18 @@ class Proyecto:
             if contorno.exceso_borde > 0 and (mapa < 0).any():
                 # donde la selección llega al borde libre del molde, la capa sigue por la superficie
                 # extendida (material de recorte en el borde de pieza): sin huecos en el borde
-                d0 = distancia_a_borde_region(ext, caras, limite=contorno.exceso_borde * 1.5)
-                lejos = d0[ext.F].max(1) > contorno.exceso_borde
-                caras = caras | ((mapa < 0) & ~lejos)
+                eb = contorno.exceso_borde
+                d0 = distancia_a_borde_region(ext, caras, limite=eb * 1.5)
+                cerca = d0[ext.F].min(1) <= eb
+                caras = caras | ((mapa < 0) & cerca)
+                # …pero sólo hasta ``eb`` más allá del borde del molde
+                tope = distancia_a_borde_region(ext, mapa >= 0, limite=eb * 3) - eb
             # la distancia sólo hace falta cerca del borde (desfases, excesos, rampas, suavizado)
             lim = 300.0 + abs(contorno.desfase) + contorno.exceso
             phi = distancia_a_borde_region(ext, caras, limite=lim)
+            if contorno.exceso_borde > 0 and (mapa < 0).any():
+                tope = np.where(np.isfinite(tope), tope, np.sign(tope) * 1e6)
+                phi = np.maximum(phi, tope)
             sv = contorno.suavizado
             a0 = float(ext.face_areas[caras].sum())
             while sv > 0.25:
