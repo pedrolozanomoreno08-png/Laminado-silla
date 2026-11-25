@@ -46,6 +46,8 @@ class OpcionesCobertura:
     secuencia: str = ""
     max_parches: int = 120
     hueco_admisible: float = 0.0     # mm² de hueco total tolerado (0: ninguno)
+    completar: bool = True           # las capas que ya hay en la secuencia cuentan (sólo se cubre
+                                     # lo que falte, ampliándolas si hace falta)
     exceso_borde: float = 5.0        # mm de tejido más allá de los bordes libres del molde (recorte)
 
 
@@ -160,6 +162,14 @@ class Cubridor:
         self.K = None
         self.errores = []
         self.creadas = []
+        if op.completar and op.secuencia:
+            previas = [c for c in proyecto.capas if c.secuencia == op.secuencia and c.activa
+                       and c.nombre in proyecto.resultados and c.contorno.tipo == "seleccion"
+                       and np.isin(np.asarray(proyecto.molde.selecciones.get(c.contorno.selecciones[0], []), int),
+                                   np.nonzero(obj)[0]).mean() > 0.5]
+            if previas:
+                self.cubierto |= mapa_cobertura(proyecto, [c.nombre for c in previas]) > 0
+                self.creadas = list(previas)
 
     # ------------------------------------------------------------------ semillas
     def _curvatura(self):
@@ -435,6 +445,9 @@ class Cubridor:
         radio = {}
         k = 0
         arista = float(np.median(m.edge_lengths))
+        if self.creadas:
+            # completando una secuencia: los huecos pequeños se cierran ampliando sus parches
+            self._absorber_migas()
         # 1) un parche por región (tubo, panel…) donde sea producible
         for nreg in op.regiones:
             caras = np.asarray(self.p.molde.selecciones.get(nreg, []), int)
@@ -517,6 +530,29 @@ class Cubridor:
                 self.cubierto &= ~falta
                 self._absorber_migas()
             self.cubierto = ~self.objetivo | (mapa_cobertura(self.p, [c.nombre for c in self.creadas]) > 0)
+            # último recurso: un parche pequeño en cada hueco que quede (no producible si sale rojo)
+            from scipy.sparse.csgraph import connected_components
+            for _ in range(3):
+                falta = ~self.cubierto
+                if not falta.any() or k >= op.max_parches + 20:
+                    break
+                ids = np.nonzero(falta)[0]
+                ncomp, et = connected_components(self.A[falta][:, falta], directed=False)
+                for kc in range(ncomp):
+                    zc = np.zeros(m.nf, bool)
+                    zc[ids[et == kc]] = True
+                    f0 = ids[et == kc][0]
+                    nombre = self._nombre(k)
+                    c, bien = self._forzar(nombre, int(m.F[f0, 0]), zona=zc)
+                    if c is None:
+                        continue
+                    c.notas = "Parche de cierre de hueco (cobertura automática)"
+                    self.creadas.append(c)
+                    inf.capas.append(c.nombre)
+                    if self.p.resultados[c.nombre].resumen.get("estado") == "ROJO":
+                        inf.no_producibles.append(c.nombre)
+                    k += 1
+                self.cubierto = ~self.objetivo | (mapa_cobertura(self.p, [c.nombre for c in self.creadas]) > 0)
         hueco = ~self.cubierto
         inf.hueco_mm2 = float(m.face_areas[hueco].sum())
         inf.cobertura_pct = 100.0 * (1 - inf.hueco_mm2 / max(A_obj, 1e-300))
@@ -590,11 +626,15 @@ class Cubridor:
             j += 1
         return f"{self.op.prefijo}{j:02d}"
 
-    def _forzar(self, nombre, sv):
-        """Parche pequeño alrededor de una zona imposible (se informará como no producible)."""
+    def _forzar(self, nombre, sv, zona=None):
+        """Parche pequeño alrededor de una zona imposible (se informará como no producible).
+        Con ``zona`` (hueco a cerrar): esa zona más el solape sobre lo que la rodea."""
         m = self.m
-        dist = distancia_grafo(m, [sv], limite=self.op.radio_min * 1.05)
-        parche = (dist[m.F].max(1) <= self.op.radio_min) & ~self.cubierto
+        if zona is not None:
+            parche = self._dilatar(zona, self.op.solape)
+        else:
+            dist = distancia_grafo(m, [sv], limite=self.op.radio_min * 1.05)
+            parche = (dist[m.F].max(1) <= self.op.radio_min) & ~self.cubierto
         if not parche.any():
             parche = np.zeros(m.nf, bool)
             parche[m.vertice_caras.tocsr()[sv].indices] = True
