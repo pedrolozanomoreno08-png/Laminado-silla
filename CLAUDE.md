@@ -27,7 +27,7 @@ ansys-mapdl-reader (opcional, .rst), pytest, pyinstaller.
   core sample, espesores, proyecto .lam.
 - `salidas/` DXF, anidado (ráster + FFT), láser, ply book PDF, Excel, tablas ACP, `todo.py`.
 - `gui/` ventana Qt + VTK con picado por clic derecho; `python -m laminado --demo`.
-- 29 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
+- 26 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
   el .exe de Windows (artefacto LaminadoStudio-windows).
 - `verificacion/`: esfera analítica, invariancias, archivos Ansys reales, class40, salidas,
   recorrido completo de la interfaz (`recorrido_gui.py`) y regresión de ejemplos
