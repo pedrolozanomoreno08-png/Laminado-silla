@@ -24,7 +24,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from ..geom.consulta import Consultor
-from ..geom.geodesia import fast_marching
+from ..geom.geodesia import distancia_grafo
 from ..geom.malla import TriMesh
 
 
@@ -196,13 +196,13 @@ class Cubridor:
         d = None
         fuentes = np.nonzero(borde[ids] | curvo)[0]
         if len(fuentes) and len(fuentes) < sub.nv:
-            d = fast_marching(sub, fuentes)
+            d = distancia_grafo(sub, fuentes)
             if not np.isfinite(d).any() or np.nanmax(np.where(np.isfinite(d), d, 0)) < 3 * arista:
                 d = None
         if d is None:
             fb = np.nonzero(borde[ids])[0]
             if len(fb):
-                d = fast_marching(sub, fb)
+                d = distancia_grafo(sub, fb)
             else:
                 d = -K           # superficie cerrada y toda curva: el punto menos curvo
         d = np.where(np.isfinite(d), d, -1)
@@ -284,7 +284,7 @@ class Cubridor:
         vh[m.F[hueco].ravel()] = True
         if not (~hueco).any():
             return np.zeros(m.nf)
-        d = fast_marching(m, vh, limite=limite)
+        d = distancia_grafo(m, vh, limite=limite)
         return d[m.F].max(1)
 
     def _abrir(self, mascara, r):
@@ -300,20 +300,20 @@ class Cubridor:
         borde = (vin & vout) | (vin & m.boundary_vertices_mask)
         if not borde.any():
             return mascara
-        d = fast_marching(m, borde, limite=r * 1.5)
+        d = distancia_grafo(m, borde, limite=r * 1.5)
         nucleo = mascara & (d[m.F].min(1) >= r)
         if not nucleo.any():
             return mascara
         vn = np.zeros(m.nv, bool)
         vn[m.F[nucleo].ravel()] = True
-        d2 = fast_marching(m, vn, limite=r * 1.5)
+        d2 = distancia_grafo(m, vn, limite=r * 1.5)
         return mascara & (d2[m.F].max(1) <= r * 1.05)
 
     def _dilatar(self, mascara, r):
         m = self.m
         v = np.zeros(m.nv, bool)
         v[m.F[mascara].ravel()] = True
-        d = fast_marching(m, v, limite=r * 1.2)
+        d = distancia_grafo(m, v, limite=r * 1.2)
         return d[m.F].max(1) <= r
 
     def _semilla_en(self, zona):
@@ -323,7 +323,7 @@ class Cubridor:
         b = sub.boundary_vertices_mask
         if not b.any():
             return int(ids[0])
-        d = fast_marching(sub, b)
+        d = distancia_grafo(sub, b)
         d = np.where(np.isfinite(d), d, -1)
         return int(ids[int(np.argmax(d))])
 
@@ -338,7 +338,7 @@ class Cubridor:
         margen = max(4 * arista, 6.0)
         dh = self._distancia_hueco(op.solape + margen * 1.5)
         if zona is None:
-            dist = fast_marching(m, [semilla_v], limite=radio * 1.05)
+            dist = distancia_grafo(m, [semilla_v], limite=radio * 1.05)
             entorno = (dist[m.F].max(1) <= radio) & (dh <= op.solape + margen)
         else:
             zona_s = self._dilatar(zona, op.solape)
@@ -485,7 +485,7 @@ class Cubridor:
             inf.capas.append(c.nombre)
             self.creadas.append(c)
             k += 1
-            self._absorber_migas()
+        self._absorber_migas()
         hueco = ~self.cubierto
         inf.hueco_mm2 = float(m.face_areas[hueco].sum())
         inf.cobertura_pct = 100.0 * (1 - inf.hueco_mm2 / max(A_obj, 1e-300))
@@ -494,7 +494,8 @@ class Cubridor:
 
     def _absorber_migas(self):
         """Las islas pequeñas sin cubrir que quedan entre parches se añaden al parche vecino
-        (ampliándolo un poco) en vez de crear parches diminutos."""
+        (ampliándolo un poco) en vez de crear parches diminutos. Se agrupan por parche vecino:
+        una sola resimulación por parche."""
         from scipy.sparse.csgraph import connected_components
         m, op = self.m, self.op
         arista = float(np.median(m.edge_lengths))
@@ -505,41 +506,43 @@ class Cubridor:
         ids = np.nonzero(hueco)[0]
         n, et = connected_components(self.A[hueco][:, hueco], directed=False)
         areas = np.bincount(et, weights=m.face_areas[ids], minlength=n)
-        for k in np.argsort(areas):
-            if areas[k] > a_miga:
-                break
+        sels = {}
+        for c in self.creadas:
+            s_ = np.zeros(m.nf, bool)
+            s_[self.p.molde.selecciones[c.contorno.selecciones[0]]] = True
+            sels[c.nombre] = s_
+        grupos = {}
+        for k in np.nonzero(areas <= a_miga)[0]:
             comp = np.zeros(m.nf, bool)
             comp[ids[et == k]] = True
-            if not (comp & ~self.cubierto).any():
-                continue
             vz = np.zeros(m.nv, bool)
             vz[m.F[comp].ravel()] = True
-            d = fast_marching(m, vz, limite=op.solape * 1.2)
+            d = distancia_grafo(m, vz, limite=op.solape * 1.2)
             dc = d[m.F].max(1)
             cerca = dc <= op.solape
             mejor, mejor_a = None, 0.0
             for c in self.creadas:
-                sel = np.zeros(m.nf, bool)
-                sel[self.p.molde.selecciones[c.contorno.selecciones[0]]] = True
-                a = float(m.face_areas[sel & cerca].sum())
+                a = float(m.face_areas[sels[c.nombre] & cerca].sum())
                 if a > mejor_a:
                     mejor, mejor_a = c, a
             if mejor is None:
                 continue
-            nsel = mejor.contorno.selecciones[0]
+            g = grupos.setdefault(mejor.nombre, [mejor, np.zeros(m.nf, bool), np.zeros(m.nf, bool)])
+            g[1] |= comp
+            g[2] |= comp | (dc <= 0.5 * op.solape)
+        for nombre, (c, comp, extra) in grupos.items():
+            nsel = c.contorno.selecciones[0]
             vieja = self.p.molde.selecciones[nsel]
-            viejo_rc = self.p.resultados.get(mejor.nombre)
-            nueva = np.zeros(m.nf, bool)
-            nueva[vieja] = True
-            nueva |= comp | (dc <= 0.5 * op.solape)
+            viejo_rc = self.p.resultados.get(c.nombre)
+            nueva = sels[nombre] | extra
             nueva = _cerrar_agujeros(self.A, m, nueva, area_max=a_miga)
             self.p.molde.selecciones[nsel] = np.nonzero(nueva)[0]
             ok = False
             try:
-                rc = self.p.simular(mejor)
+                rc = self.p.simular(c)
                 bien = self._caras_bien(rc, nueva)
                 ok = (rc.resumen.get("estado") != "ROJO"
-                      and m.face_areas[bien & comp].sum() >= 0.98 * m.face_areas[comp].sum())
+                      and m.face_areas[bien & comp].sum() >= 0.9 * m.face_areas[comp].sum())
             except Exception:  # noqa: BLE001
                 ok = False
             if ok:
@@ -547,7 +550,7 @@ class Cubridor:
             else:
                 self.p.molde.selecciones[nsel] = vieja
                 if viejo_rc is not None:
-                    self.p.resultados[mejor.nombre] = viejo_rc
+                    self.p.resultados[c.nombre] = viejo_rc
 
     def _nombre(self, k):
         existentes = {c.nombre for c in self.p.capas}
@@ -559,7 +562,7 @@ class Cubridor:
     def _forzar(self, nombre, sv):
         """Parche pequeño alrededor de una zona imposible (se informará como no producible)."""
         m = self.m
-        dist = fast_marching(m, [sv], limite=self.op.radio_min * 1.05)
+        dist = distancia_grafo(m, [sv], limite=self.op.radio_min * 1.05)
         parche = (dist[m.F].max(1) <= self.op.radio_min) & ~self.cubierto
         if not parche.any():
             parche = np.zeros(m.nf, bool)

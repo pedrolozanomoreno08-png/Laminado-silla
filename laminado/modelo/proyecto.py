@@ -305,7 +305,9 @@ class Proyecto:
             caras = sel_total[np.where(mapa >= 0, mapa, self.malla.nf)]
             if not caras.any():
                 raise ValueError("La selección del contorno está vacía")
-            phi = distancia_a_borde_region(ext, caras)
+            # la distancia sólo hace falta cerca del borde (desfases, excesos, rampas, suavizado)
+            lim = 300.0 + abs(contorno.desfase) + contorno.exceso
+            phi = distancia_a_borde_region(ext, caras, limite=lim)
             sv = contorno.suavizado
             a0 = float(ext.face_areas[caras].sum())
             while sv > 0.25:
