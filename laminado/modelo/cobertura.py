@@ -266,7 +266,10 @@ class Cubridor:
             ea, eb = r.deformaciones()
             phi = getattr(r, "phi_neto", None)
             neto = (phi[r.malla.F].mean(1) <= 1e-9) if phi is not None else np.ones(r.malla.nf, bool)
-            buena = (r.cara_cubierta() & (g <= self.adm) & (np.abs(ea) < 0.02) & (np.abs(eb) < 0.02) & neto)
+            # el alargamiento por cara es ruidoso (interpolación red→malla); sólo se usa para detectar
+            # costuras (saltos de la red al cerrar un tubo) y pliegues, que dan valores enormes
+            buena = (r.cara_cubierta() & (g <= self.adm) & (np.abs(ea) < 0.10) & (np.abs(eb) < 0.10)
+                     & (r.gradientes()[2] > 0) & neto)
             mejor_aqui = d < mejor
             ok = np.where(mejor_aqui, buena[f] & (d < 0.5 + getattr(rc, "desplazamiento", 0.0)), ok)
             mejor = np.minimum(mejor, d)
