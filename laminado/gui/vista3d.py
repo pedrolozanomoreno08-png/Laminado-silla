@@ -118,6 +118,21 @@ class Vista3D(QtCore.QObject):
         self.poner(nombre, self.plotter.add_mesh(pd, scalars=titulo, cmap=cmap, name=nombre, render=False,
                                                  scalar_bar_args={"title": titulo, "vertical": True}))
 
+    def cobertura(self, nombre, malla, n):
+        """Número de capas por cara: 0 en rojo (hueco sin tejido)."""
+        pd = a_pv(malla)
+        nmax = max(int(n.max()), 1)
+        pd.cell_data["Nº de capas"] = n.astype(float)
+        import matplotlib.colors as mcol
+        import matplotlib.pyplot as plt
+        base = plt.get_cmap("viridis", nmax)
+        cols = ["#d62728"] + [mcol.to_hex(base(k)) for k in range(nmax)]
+        self.poner(nombre, self.plotter.add_mesh(pd, scalars="Nº de capas", cmap=cols, clim=(-0.5, nmax + 0.5),
+                                                 n_colors=nmax + 1, name=nombre, render=False,
+                                                 scalar_bar_args={"title": "Nº de capas (rojo = hueco)",
+                                                                  "vertical": True, "n_labels": min(nmax + 2, 8),
+                                                                  "fmt": "%.0f"}))
+
     def red(self, nombre, red, color="#555555"):
         """Dibuja los hilos de la red cinemática."""
         self.quitar(nombre)
