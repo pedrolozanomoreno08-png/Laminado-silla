@@ -224,7 +224,7 @@ def exportar_ansys(proyecto, carpeta):
         if rc is None:
             continue
         r = rc.drapeado
-        neto_d = Consultor(rc.neto).mas_cercano(X)[3] < 0.5
+        neto_d = Consultor(rc.neto_en_molde).mas_cercano(X)[3] < 0.5
         cr = Consultor(r.malla)
         _, fr, _, _ = cr.mas_cercano(X[neto_d])
         ea, eb = r.fibras()

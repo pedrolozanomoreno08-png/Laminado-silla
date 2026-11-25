@@ -26,6 +26,7 @@ class OpcionesDrapeado:
     k_s: float = 1.0
     max_iter_energia: int = 60
     relajar_darts: bool = True
+    rellenar: bool = True                 # completar por energía las zonas que la red no alcanza
 
 
 def _camino_dart(m: TriMesh, puntos):
@@ -119,7 +120,7 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         # la solución por energía cubre toda la capa (la producibilidad la da la cizalla)
         cubierto = np.ones(m.nv, bool)
         de_red = None
-    elif not cubierto.all():
+    elif not cubierto.all() and opciones.rellenar:
         # zonas que la red no alcanza (bloqueo del tejido): se completan por energía con la
         # zona alcanzada fija, para que el patrón plano sea continuo
         uv, inf = drapear_energia(m, uv, sv, d0, max_iter=60, fijos=np.nonzero(cubierto)[0], **kw)

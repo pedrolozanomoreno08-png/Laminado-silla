@@ -249,3 +249,16 @@ def distancia_a_borde_region(m: TriMesh, mascara_caras, limite=np.inf):
     del sub_borde
     signo = np.where(dentro_v & ~fuera_v, -1.0, 1.0)
     return signo * d
+
+
+def distancia_grafo(m: TriMesh, fuentes, limite: float = np.inf) -> np.ndarray:
+    """Distancia por las aristas de la malla (Dijkstra, en C): aproximación rápida de la
+    geodésica (la sobreestima unos pocos %), suficiente para dilatar zonas o medir entornos."""
+    from scipy.sparse.csgraph import dijkstra
+    fuentes = np.asarray(fuentes)
+    if fuentes.dtype == bool:
+        fuentes = np.nonzero(fuentes)[0]
+    if len(fuentes) == 0:
+        return np.full(m.nv, np.inf)
+    return dijkstra(m.adyacencia, directed=False, indices=fuentes, min_only=True,
+                    limit=limite if np.isfinite(limite) else np.inf)

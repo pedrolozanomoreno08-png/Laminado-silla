@@ -67,6 +67,7 @@ class Contorno:
     roseta: str = ""                                    # roseta que define el plano del polígono
     desfase: float = 0.0                                # mm (+ crece, − encoge)
     exceso: float = 0.0                                 # mm de material de recorte fuera del neto
+    suavizado: float = 0.0                              # mm: suaviza el borde escalonado de una selección
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Capa:
     solape_empalme: float = 15.0
     empalmes_auto_cizalla: bool = False   # dividir la capa donde la cizalla supera el límite
     curva_semilla: list = field(default_factory=list)
+    relleno: bool = True                  # completar por energía lo que la red no alcanza
     secuencia: str = ""
     activa: bool = True
     notas: str = ""
@@ -117,6 +119,12 @@ class ResultadoCapa:
     phi_neto: np.ndarray                  # en los vértices de drapeado.malla (≤0 dentro del neto)
     empalmes: list = field(default_factory=list)
     resumen: dict = field(default_factory=dict)
+    neto_molde: TriMesh | None = None      # región neta sobre el molde (sin desplazar por espesor)
+    desplazamiento: float = 0.0            # desplazamiento máximo de la superficie de drapeado (mm)
+
+    @property
+    def neto_en_molde(self) -> TriMesh:
+        return self.neto_molde if self.neto_molde is not None else self.neto
 
     def contornos_netos_uv(self, pieza=None):
         """Bucles del contorno neto en el plano para el resultado completo o una pieza."""
@@ -163,6 +171,11 @@ class Proyecto:
         self.nucleos: list[Nucleo] = []
         self.h = 6.0
         self.extension = 60.0
+        # laminado con espesor: cada capa se drapea sobre la superficie desplazada por el espesor
+        # de las capas (y núcleos) que tiene debajo
+        self.drapeado_con_espesor = True
+        self.sentido_laminado = 1.0          # +1: el laminado crece según la normal del molde
+        self.rampa = 20.0                    # longitud de la terminación de capa / espesor
         self.resultados: dict[str, ResultadoCapa] = {}
         self.ruta = None
         self._ext = None
@@ -292,7 +305,19 @@ class Proyecto:
             caras = sel_total[np.where(mapa >= 0, mapa, self.malla.nf)]
             if not caras.any():
                 raise ValueError("La selección del contorno está vacía")
-            return distancia_a_borde_region(ext, caras)
+            # la distancia sólo hace falta cerca del borde (desfases, excesos, rampas, suavizado)
+            lim = 300.0 + abs(contorno.desfase) + contorno.exceso
+            phi = distancia_a_borde_region(ext, caras, limite=lim)
+            sv = contorno.suavizado
+            a0 = float(ext.face_areas[caras].sum())
+            while sv > 0.25:
+                # el suavizado no debe comerse la selección (zonas estrechas): se reduce si hace falta
+                ps = suavizar_campo(ext, phi, sv)
+                a1 = float(ext.face_areas[ps[ext.F].mean(1) <= 0].sum())
+                if a1 >= 0.9 * a0:
+                    return ps
+                sv /= 2
+            return phi
         if contorno.tipo == "poligono":
             from shapely.geometry import Point, Polygon
             ros = self.rosetas.get(contorno.roseta) or next(iter(self.rosetas.values()))
@@ -314,37 +339,123 @@ class Proyecto:
             return np.where(dentro, -d, d)
         raise ValueError(f"Tipo de contorno desconocido: {contorno.tipo}")
 
+    def _clave_contorno(self, contorno: Contorno):
+        sel = tuple((n, hash(np.asarray(self.molde.selecciones.get(n, []), np.int64).tobytes()))
+                    for n in contorno.selecciones) if contorno.tipo == "seleccion" else ()
+        return (contorno.tipo, sel, json.dumps(contorno.puntos, default=_json_def), contorno.roseta,
+                round(contorno.suavizado, 6))
+
+    def _phi_cache(self, contorno, ext, mapa, clave_sup):
+        if not hasattr(self, "_phis"):
+            self._phis = {}
+        k = (clave_sup, id(ext), self._clave_contorno(contorno))
+        if k not in self._phis:
+            try:
+                self._phis[k] = self._phi_contorno(contorno, ext, mapa)
+            except ValueError:
+                self._phis[k] = None
+        return self._phis[k]
+
+    def espesor_debajo(self, capa, ext, mapa, clave_sup):
+        """Espesor (mm) en los vértices de la superficie ``ext`` de las capas y núcleos colocados
+        antes que ``capa`` (todas si capa es None). Las terminaciones de capa y los chaflanes
+        de núcleo son rampas (longitud = rampa·espesor o espesor/tan(chaflán))."""
+        t = np.zeros(ext.nv)
+        antes = []
+        for c in self.capas:
+            if capa is not None and c is capa:
+                break
+            if c.activa:
+                antes.append(c)
+        nombres = {c.nombre for c in antes}
+        for c in antes:
+            phi = self._phi_cache(c.contorno, ext, mapa, clave_sup)
+            if phi is None:
+                continue
+            e = self.materiales[c.material].espesor
+            L = max(self.rampa * e, 1e-6)
+            t += e * np.clip(0.5 - (phi - self.desfase_total(c)) / L, 0.0, 1.0)
+        for nu in self.nucleos:
+            if capa is not None and nu.despues_de and nu.despues_de not in nombres:
+                continue
+            if capa is not None and not nu.despues_de and not antes:
+                continue
+            phi = self._phi_cache(nu.contorno, ext, mapa, clave_sup)
+            if phi is None:
+                continue
+            L = max(nu.espesor / max(np.tan(np.radians(nu.chaflan)), 1e-3), 1e-6)
+            # chaflán hacia dentro del contorno: espesor completo a L del borde
+            t += nu.espesor * np.clip(-(phi - nu.contorno.desfase) / L, 0.0, 1.0)
+        return t
+
     def region(self, capa: Capa | Nucleo):
         """(malla de corte = neto + exceso, phi neto en sus vértices, malla neta).
 
-        Se trabaja sobre la superficie de los paneles afectados (ver ``superficie``); el
-        consultor de esa superficie queda en ``self._cons_capa`` para el drapeado."""
+        Se trabaja sobre la superficie de los paneles afectados (ver ``superficie``). Con
+        ``drapeado_con_espesor`` esa superficie se desplaza según la normal por el espesor de lo
+        que hay debajo de la capa. El consultor de la superficie de drapeado queda en
+        ``self._cons_capa``, la malla neta sobre el molde en ``self._neto_molde`` y el
+        desplazamiento máximo en ``self._desplazamiento``."""
         c = capa.contorno
-        ext, cons, mapa = self.superficie(self.componentes_de(c))
+        comps = self.componentes_de(c)
+        ext, cons, mapa = self.superficie(comps)
+        clave_sup = tuple(comps)
+        phi = self._phi_cache(c, ext, mapa, clave_sup)
+        if phi is None:
+            raise ValueError("La selección del contorno está vacía")
+        phi = np.where(np.isfinite(phi), phi, np.sign(phi) * 1e6)
+        desp = np.zeros((ext.nv, 3))
+        if self.drapeado_con_espesor and isinstance(capa, Capa):
+            t = self.espesor_debajo(capa, ext, mapa, clave_sup)
+            if t.max() > 1e-9:
+                desp = (self.sentido_laminado * t)[:, None] * ext.vertex_normals
+                cons = Consultor(TriMesh(ext.V + desp, ext.F))
         self._cons_capa = cons
-        phi = self._phi_contorno(c, ext, mapa)
+        self._desplazamiento = float(np.linalg.norm(desp, axis=1).max())
         desf = self.desfase_total(capa) if isinstance(capa, Capa) else c.desfase
         # corte por el contorno neto (desfase): phi' = phi - desfase
-        m1, phi1, _ = cortar_por_nivel(ext, phi, desf)
+        m1, phi1, d1 = cortar_por_nivel(ext, phi, desf, extra=desp)
         neto_caras = phi1[m1.F].mean(1) <= 0
         if c.exceso > 0:
             d = distancia_a_borde_region(m1, neto_caras, limite=3 * c.exceso)
             d = np.where(np.isinf(d), np.sign(d) * 1e9, d)
-            m2, d2, ex = cortar_por_nivel(m1, d, c.exceso, extra=phi1)
+            m2, d2, ex = cortar_por_nivel(m1, d, c.exceso, extra=np.c_[phi1, d1])
             corte = d2[m2.F].mean(1) <= 0
             sub, ids, _ = m2.submalla(corte)
-            phi_sub = ex[ids]
+            phi_sub, desp_sub = ex[ids, 0], ex[ids, 1:]
         else:
             sub, ids, _ = m1.submalla(neto_caras)
-            phi_sub = phi1[ids]
+            phi_sub, desp_sub = phi1[ids], d1[ids]
+        if sub.nf == 0:
+            import os
+            if os.environ.get("LAMINADO_DEBUG"):
+                print("REGION VACIA", c.tipo, c.selecciones, [len(self.molde.selecciones.get(n, [])) for n in c.selecciones],
+                      "phi min", float(np.min(phi)), "desf", desf, "suav", c.suavizado, "ext", ext.nf, flush=True)
+            raise ValueError("El contorno de la capa no contiene superficie")
         # quedarse con la componente conexa mayor
         nc, et = sub.componentes()
         if nc > 1:
             mayor = np.argmax(np.bincount(et, weights=sub.face_areas))
             sub2, ids2, _ = sub.submalla(et == mayor)
-            sub, phi_sub = sub2, phi_sub[ids2]
-        neto, _, _ = sub.submalla(phi_sub[sub.F].mean(1) <= 1e-9)
-        return sub, phi_sub, neto
+            sub, phi_sub, desp_sub = sub2, phi_sub[ids2], desp_sub[ids2]
+        neto_molde, idn, _ = sub.submalla(phi_sub[sub.F].mean(1) <= 1e-9)
+        self._neto_molde = neto_molde
+        sub_d = TriMesh(sub.V + desp_sub, sub.F)
+        neto = TriMesh(neto_molde.V + desp_sub[idn], neto_molde.F)
+        return sub_d, phi_sub, neto
+
+    def superficie_laminado(self, componentes=None):
+        """Superficie del molde desplazada por el espesor total del laminado (la otra cara de la
+        pieza: interior si se lamina sobre un molde hembra, exterior si es macho)."""
+        if componentes is None:
+            componentes = range(self.malla.componentes()[0])
+        comps = list(componentes)
+        ext, _, mapa = self.superficie(comps)
+        t = self.espesor_debajo(None, ext, mapa, tuple(comps))
+        caras = mapa >= 0
+        sub, ids, _ = ext.submalla(caras)
+        V = sub.V + (self.sentido_laminado * t[ids])[:, None] * sub.vertex_normals
+        return TriMesh(V, sub.F), t[ids]
 
     # -------------------------------------------------------------- simulación
     def opciones(self, capa: Capa) -> OpcionesDrapeado:
@@ -352,7 +463,7 @@ class Proyecto:
         return OpcionesDrapeado(estrategia=capa.estrategia, h=capa.h or self.h,
                                 angulo_bloqueo=min(80.0, mat.cizalla_limite * 1.2),
                                 curva_semilla=np.asarray(capa.curva_semilla, float) if capa.curva_semilla else None,
-                                unidireccional=mat.unidireccional)
+                                unidireccional=mat.unidireccional, rellenar=capa.relleno)
 
     def simular(self, capa: Capa | str, progreso=None) -> ResultadoCapa:
         if isinstance(capa, str):
@@ -434,6 +545,8 @@ class Proyecto:
                 if n_auto >= n_auto_max or roja <= 0:
                     break
         rc = ResultadoCapa(capa.nombre, res, piezas, neto, phi_r, empalmes)
+        rc.neto_molde = self._neto_molde
+        rc.desplazamiento = self._desplazamiento
         rc.resumen = self._resumen(capa, rc)
         self.resultados[capa.nombre] = rc
         return rc
@@ -534,12 +647,13 @@ class Proyecto:
             rc = self.resultados.get(c.nombre)
             if rc is None or not c.activa:
                 continue
-            cons = Consultor(rc.neto)
+            cons = Consultor(rc.neto_en_molde)
             Q, f, b, d = cons.mas_cercano(P)
             if d[0] > tol:
                 continue
-            # ángulo real en la cara del drapeado más cercana
-            rs, fr = rc.localizar(Q)
+            # ángulo real en la cara del drapeado más cercana (sobre la superficie desplazada)
+            Qd = Q if rc.desplazamiento == 0 else Consultor(rc.neto).mas_cercano(Q)[0]
+            rs, fr = rc.localizar(Qd)
             r = rs[0]
             n = r.malla.face_normals[fr]
             ros = self.rosetas.get(c.roseta) or next(iter(self.rosetas.values()))
@@ -565,26 +679,24 @@ class Proyecto:
         return clt.constantes_ingenieria(lam)
 
     def espesores(self):
-        """Espesor curado (mm) y número de capas en cada cara del molde."""
+        """Espesor curado (mm, con las rampas de terminación de capa y chaflanes de núcleo) y
+        número de capas en cada cara del molde."""
         m = self.malla
         X = m.face_centroids
         esp = np.zeros(m.nf)
         n = np.zeros(m.nf, int)
+        nc, et = m.componentes()
+        for comp in range(nc):
+            ext, _, mapa = self.superficie([comp])
+            t = self.espesor_debajo(None, ext, mapa, (comp,))
+            caras = np.nonzero(mapa >= 0)[0]
+            esp[mapa[caras]] = t[ext.F[caras]].mean(1)
         for c in self.capas:
             rc = self.resultados.get(c.nombre)
             if rc is None or not c.activa:
                 continue
-            d = Consultor(rc.neto).mas_cercano(X)[3]
-            dentro = d < 0.5
-            esp[dentro] += self.materiales[c.material].espesor
-            n[dentro] += 1
-        for nu in self.nucleos:
-            try:
-                _, _, neto = self.region(nu)
-            except Exception:
-                continue
-            d = Consultor(neto).mas_cercano(X)[3]
-            esp[d < 0.5] += nu.espesor
+            d = Consultor(rc.neto_en_molde).mas_cercano(X)[3]
+            n[d < 0.5] += 1
         return esp, n
 
     # --------------------------------------------------------- guardar / abrir
@@ -599,6 +711,8 @@ class Proyecto:
             "formato": "laminado-studio/1",
             "nombre": self.nombre,
             "h": self.h, "extension": self.extension,
+            "drapeado_con_espesor": self.drapeado_con_espesor, "sentido_laminado": self.sentido_laminado,
+            "rampa": self.rampa,
             "molde": {"origen": self.molde.origen if self.molde else "",
                       "datos": base64.b64encode(buf.getvalue()).decode() if self.molde else ""},
             "materiales": {k: m.a_dict() for k, m in self.materiales.items()},
@@ -620,6 +734,9 @@ class Proyecto:
         p = Proyecto(d.get("nombre", os.path.basename(ruta)))
         p.h = d.get("h", 6.0)
         p.extension = d.get("extension", 60.0)
+        p.drapeado_con_espesor = d.get("drapeado_con_espesor", False)
+        p.sentido_laminado = d.get("sentido_laminado", 1.0)
+        p.rampa = d.get("rampa", 20.0)
         if d["molde"]["datos"]:
             z = np.load(io.BytesIO(base64.b64decode(d["molde"]["datos"])))
             sel = {k[5:]: z[k] for k in z.files if k.startswith("sel__")}
@@ -685,6 +802,16 @@ def _dif_ang(real, nominal, mat):
     periodo = 90.0 if (mat.tipo == "tejido" and mat.simetrico) else 180.0
     d = (real - nominal + periodo / 2) % periodo - periodo / 2
     return float(d)
+
+
+def suavizar_campo(m: TriMesh, phi, s):
+    """Difusión implícita (M − s²·L) φ' = M φ: el nivel 0 de una distancia a un borde escalonado
+    (caras de una selección) pasa a ser una curva suave, sin desplazarla en promedio."""
+    import scipy.sparse.linalg as spla
+    lim = 50.0 * s
+    phi = np.clip(np.where(np.isfinite(phi), phi, np.sign(phi) * lim), -lim, lim)
+    A = (m.masa - (s * s) * m.laplaciano_cot).tocsc()
+    return spla.spsolve(A, m.masa @ phi)
 
 
 def _cubierta(r):

@@ -116,6 +116,29 @@ paso("nuevo material", w.nuevo_material)
 paso("nueva roseta", w.nueva_roseta)
 paso("nueva secuencia", w.nueva_secuencia)
 paso("asistente de laminado", lambda: (sel("capa", "P003"), w.asistente()))
+
+
+def _cobertura():
+    from laminado.gui import dialogos
+
+    def ejecutar(self):
+        self.ori.setText("0")
+        for i in range(self.zona.count()):
+            if self.zona.item(i).text() == "POMO":
+                self.zona.item(i).setSelected(True)
+        return True
+    dialogos.DialogoCobertura.exec = ejecutar
+    w.cobertura_auto()
+    esperar()
+    assert any(c.nombre.startswith("C0_") for c in w.p.capas), "sin parches de cobertura"
+    w.modo_color.setCurrentText("Cobertura (nº de capas)")
+    w._dibujar()
+
+
+paso("cobertura completa automática", _cobertura)
+paso("modo de color cobertura", lambda: (sel("capa", "P001"), w._dibujar()))
+paso("laminado con espesor (panel del proyecto)", lambda: (sel("proyecto", None),
+                                                          setattr(w.p, "drapeado_con_espesor", True)))
 paso("simular todas", w.simular_todas)
 paso("salida DXF", w.sal_dxf)
 paso("salida anidado", w.sal_anidado)

@@ -166,6 +166,7 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
         m.addAction(self._accion("Nueva secuencia", self.nueva_secuencia))
         m.addAction(self._accion("Nuevo núcleo", self.nuevo_nucleo))
         m.addAction(self._accion("Asistente de laminado (lista de orientaciones)…", self.asistente))
+        m.addAction(self._accion("Cobertura completa automática (parches producibles)…", self.cobertura_auto))
         m = mb.addMenu("&Drapeado")
         self.a_sim = self._accion("Simular capa seleccionada", self.simular_sel, "F5", sp.SP_MediaPlay)
         self.a_sim_todas = self._accion("Simular todas las capas", self.simular_todas, "Shift+F5", sp.SP_MediaSeekForward)
@@ -201,7 +202,7 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
         tb.addSeparator()
         tb.addWidget(QtWidgets.QLabel(" Color: "))
         self.modo_color = QtWidgets.QComboBox()
-        self.modo_color.addItems(["Producibilidad", "Cizalla", "Ángulo de fibra", "Espesores", "Sólo molde"])
+        self.modo_color.addItems(["Producibilidad", "Cizalla", "Ángulo de fibra", "Espesores", "Cobertura (nº de capas)", "Sólo molde"])
         self.modo_color.currentIndexChanged.connect(lambda *_: self._dibujar())
         tb.addWidget(self.modo_color)
         self.ch_red = QtWidgets.QCheckBox("Red")
@@ -444,6 +445,20 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
             esp, _ = self.p.espesores()
             v.quitar("molde")
             v.malla_coloreada("espesor", self.p.malla, esp, "Espesor (mm)")
+        elif modo.startswith("Cobertura") and self.p.resultados:
+            from ..modelo.cobertura import mapa_cobertura
+            capas = None
+            if tipo == "secuencia" and clave in self.p.secuencias:
+                capas = self.p.secuencias[clave].capas
+            elif tipo == "capa" and self.p.capa(clave).secuencia in self.p.secuencias:
+                capas = self.p.secuencias[self.p.capa(clave).secuencia].capas
+            n = mapa_cobertura(self.p, capas)
+            v.quitar("molde")
+            v.cobertura("espesor", self.p.malla, n)
+            hueco = float(self.p.malla.face_areas[n == 0].sum())
+            que = f"secuencia «{self.p.capa(clave).secuencia if tipo == 'capa' else clave}»" if capas else "todas las capas"
+            self.barra.showMessage(f"Cobertura de {que}: hueco sin tejido {hueco:.0f} mm² "
+                                   f"({100 * hueco / self.p.malla.area:.2f} % del molde); máx. {int(n.max())} capas")
         else:
             v.molde(self.p.malla, opacidad=1.0)
         if tipo == "seleccion" and self.p.molde:
@@ -456,7 +471,7 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
                 r = self.p.resultados.get(c.nombre)
                 if r:
                     v.lineas(f"previas_{c.nombre}", [r.neto.V[b] for b in r.neto.boundary_loops()], "#555555", 2, True)
-        if rc is not None and modo not in ("Sólo molde", "Espesores"):
+        if rc is not None and modo not in ("Sólo molde", "Espesores") and not modo.startswith("Cobertura"):
             capa = self.p.capa(clave)
             mat = self.p.materiales[capa.material]
             r = rc.drapeado
@@ -687,11 +702,14 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
         self.tabs.setCurrentIndex(2)
 
     # ============================================================== simulación
-    def _ejecutar(self, fn, al_terminar, *args, texto="Calculando…"):
+    def _ejecutar(self, fn, al_terminar, *args, texto="Calculando…", con_progreso=False):
         self._ocupado = True
         self.progreso.show()
         self.barra.showMessage(texto)
         t = Trabajo(fn, *args)
+        if con_progreso:
+            t.args = args + (lambda txt: t.s.progreso.emit(str(txt)),)
+            t.s.progreso.connect(lambda txt: self.barra.showMessage(txt))
         t.s.hecho.connect(lambda r: self._fin_trabajo(al_terminar, r))
         t.s.error.connect(self._error_trabajo)
         self._trabajo = t
@@ -904,6 +922,43 @@ class VentanaPrincipal(QtWidgets.QMainWindow):
             sec.capas.append(c.nombre)
         self.p.secuencias[sec.nombre] = sec
         self._refrescar_todo()
+
+    def cobertura_auto(self):
+        if self.p.molde is None or self._ocupado:
+            return
+        from .dialogos import DialogoCobertura
+        dlg = DialogoCobertura(self, self.p)
+        if not dlg.exec():
+            return
+        ops = dlg.opciones()
+        if not ops:
+            return
+        from ..modelo.cobertura import cubrir
+
+        def fn(progreso):
+            informes = []
+            for op in ops:
+                def prog(k, frac, nombre, op=op):
+                    progreso(f"Cobertura {op.orientacion:g}°: parche {nombre}, queda sin cubrir {100 * frac:.1f} %")
+                informes.append((op, cubrir(self.p, op, prog)))
+            return informes
+
+        def fin(informes):
+            self._refrescar_todo()
+            lineas = []
+            for op, inf in informes:
+                lineas.append(f"{op.secuencia}: {len(inf.capas)} parches, cubierto {inf.cobertura_pct:.2f} % "
+                              f"(hueco {inf.hueco_mm2:.0f} mm²)")
+                if inf.no_producibles:
+                    lineas.append("   no producibles (revisar): " + ", ".join(inf.no_producibles))
+                lineas += ["   " + n for n in inf.notas]
+            i = self.modo_color.findText("Cobertura (nº de capas)")
+            if i >= 0:
+                self.modo_color.setCurrentIndex(i)
+            if informes and informes[0][0].secuencia:
+                self._seleccionar("secuencia", informes[0][0].secuencia)
+            QtWidgets.QMessageBox.information(self, "Cobertura completa", "\n".join(lineas))
+        self._ejecutar(fn, fin, texto="Cubriendo el molde con parches…", con_progreso=True)
 
     # ================================================================= salidas
     def _carpeta(self, titulo):
