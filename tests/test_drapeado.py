@@ -54,16 +54,23 @@ def test_jacobiano_energia(casquete):
 
 
 def test_dart_reduce_cizalla(casquete):
+    """Con el mismo método (la relajación por energía que se usa con darts), el dart reduce la
+    cizalla en su entorno y abre una muesca en el patrón."""
     c = Consultor(extender_superficie(casquete, 40))
-    op = OpcionesDrapeado(h=5.0)
-    r0 = simular_capa(casquete, c, [0, 0, 100], [1, 0, 0], op)
     P = np.array([[np.cos(np.pi / 4) * 85, np.sin(np.pi / 4) * 85, 52.0], [40, 40, 80]])
-    r1 = simular_capa(casquete, c, [0, 0, 100], [1, 0, 0], op, [Dart(P)])
+    r0 = simular_capa(casquete, c, [0, 0, 100], [1, 0, 0], OpcionesDrapeado(h=5.0, estrategia="energia"))
+    r1 = simular_capa(casquete, c, [0, 0, 100], [1, 0, 0], OpcionesDrapeado(h=5.0), [Dart(P)])
     assert len(r1.darts) == 1
     assert r1.malla.nv > casquete.nv
-    g0 = np.abs(r0.cizalla())
-    g1 = np.abs(r1.cizalla())
-    assert g1.max() < g0.max()
+    from scipy.spatial import cKDTree
+    linea = np.linspace(P[0], P[1], 50)
+    cerca0 = cKDTree(linea).query(r0.malla.face_centroids)[0] < 25
+    cerca1 = cKDTree(linea).query(r1.malla.face_centroids)[0] < 25
+    g0 = np.abs(r0.cizalla())[cerca0].mean()
+    g1 = np.abs(r1.cizalla())[cerca1].mean()
+    assert g1 < 0.8 * g0
+    # el patrón plano gana una muesca: el área plana baja aunque la superficie es la misma
+    assert r1.area_plana() < r0.area_plana()
 
 
 def test_empalmes_por_ancho(medio_cilindro):

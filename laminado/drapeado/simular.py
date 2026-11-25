@@ -96,6 +96,7 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         uv0, cub0, _ = mapear_red(red, malla_capa)
         uv, cubierto = uv0[origen], cub0[origen]
     info = {"nodos_red": int(red.ok.sum())}
+    de_red = cubierto.copy()
     if not cubierto.all() and cubierto.sum() >= 3:
         # punto de partida de las zonas no alcanzadas: el tejido se prolonga desde la zona
         # cubierta con la dirección local de los hilos (luego la energía lo ajusta)
@@ -116,6 +117,7 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         info.update(inf)
         # la solución por energía cubre toda la capa (la producibilidad la da la cizalla)
         cubierto = np.ones(m.nv, bool)
+        de_red = None
     elif not cubierto.all():
         # zonas que la red no alcanza (bloqueo del tejido): se completan por energía con la
         # zona alcanzada fija, para que el patrón plano sea continuo
@@ -130,7 +132,7 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         malos[m.F[~ok_cara].ravel()] = True
         info["relleno_valido_%"] = float(100 * ok_cara.mean())
         cubierto = cubierto | ~malos
-    return ResultadoDrapeado(m, uv, cubierto, estr, red, origen, darts_aj, info)
+    return ResultadoDrapeado(m, uv, cubierto, estr, red, origen, darts_aj, info, de_red)
 
 
 # --------------------------------------------------------------------------- darts automáticos

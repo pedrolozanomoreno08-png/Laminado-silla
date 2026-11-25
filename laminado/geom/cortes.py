@@ -50,14 +50,17 @@ def cortar_por_nivel(m: TriMesh, phi, nivel: float = 0.0, extra=None):
                 poli.append(id_nuevo[ef[k]])
         # poli tiene 4 (corte por un vértice) o 5 vértices; se triangula por lados
         lados = [phi2[v] for v in poli]
-        Fn.extend(_triangular_poligono_cortado(poli, lados))
+        Fn.extend(_triangular_poligono_cortado(poli, lados, V2))
     F2 = np.vstack([x if isinstance(x, np.ndarray) else np.array(x).reshape(-1, 3) for x in Fn if len(x)])
     m2 = TriMesh(V2, F2)
     return m2, phi2, ex2
 
 
-def _triangular_poligono_cortado(poli, lados):
-    """Triangula un polígono (lista de vértices) separando la parte negativa de la positiva."""
+def _triangular_poligono_cortado(poli, lados, V=None):
+    """Triangula un polígono (lista de vértices) separando la parte negativa de la positiva.
+
+    Los cuadriláteros se parten por su diagonal más corta (mejores triángulos y resultado
+    independiente del orden de los vértices: un corte simétrico da una malla simétrica)."""
     n = len(poli)
     ceros = [i for i in range(n) if lados[i] == 0]
     out = []
@@ -69,6 +72,13 @@ def _triangular_poligono_cortado(poli, lados):
     i0, i1 = ceros[0], ceros[1]
     for parte in ([poli[(i0 + k) % n] for k in range((i1 - i0) % n + 1)],
                   [poli[(i1 + k) % n] for k in range((i0 - i1) % n + 1)]):
+        if len(parte) == 4 and V is not None:
+            p0, p1, p2, p3 = parte
+            if np.linalg.norm(V[p1] - V[p3]) < np.linalg.norm(V[p0] - V[p2]):
+                out += [[p0, p1, p3], [p1, p2, p3]]
+            else:
+                out += [[p0, p1, p2], [p0, p2, p3]]
+            continue
         for k in range(1, len(parte) - 1):
             out.append([parte[0], parte[k], parte[k + 1]])
     return out
@@ -187,8 +197,13 @@ def extender_superficie(m: TriMesh, distancia: float, anillos: int | None = None
             a1 = np.roll(a, -1)
             b1 = np.roll(b, -1)
             # orientación coherente con la malla original: el borde (a -> a1) es dirigido
-            # como las caras, así que las caras nuevas recorren (a1 -> a)
-            Fs.append(np.stack([a1, a, b], 1))
-            Fs.append(np.stack([a1, b, b1], 1))
+            # como las caras, así que las caras nuevas recorren (a1 -> a). Cada cuadrilátero se
+            # parte por su diagonal más corta (regla independiente del sentido de recorrido:
+            # una pieza simétrica tiene una extensión simétrica)
+            d1 = np.linalg.norm(V[a1] - V[b], axis=1)      # diagonal a1-b
+            d2 = np.linalg.norm(V[a] - V[b1], axis=1)      # diagonal a-b1
+            corta1 = d1 <= d2
+            Fs.append(np.where(corta1[:, None], np.stack([a1, a, b], 1), np.stack([a1, a, b1], 1)))
+            Fs.append(np.where(corta1[:, None], np.stack([a1, b, b1], 1), np.stack([a, b, b1], 1)))
         del base, nprev
     return TriMesh(V, np.vstack(Fs))

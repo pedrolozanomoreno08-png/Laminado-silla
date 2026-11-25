@@ -47,7 +47,9 @@ def casco_silla(tam: float = 6.0, contorno: bool = True) -> TriMesh:
     Si ``contorno`` es True el borde inferior de los faldones y las puntas se redondean
     (contorno real de un casco), si no se devuelve el rectángulo paramétrico completo."""
     nx = int(np.ceil(LARGO / tam)) + 1
-    ns = int(np.ceil(2 * ARCO / tam)) + 1
+    # número impar de líneas: hay una línea de malla en y = 0 y el patrón de diagonales
+    # alternas queda simétrico respecto al plano medio (silla exactamente simétrica)
+    ns = 2 * int(np.ceil(ARCO / tam)) + 1
     xs = np.linspace(-LARGO / 2, LARGO / 2, nx)
     ss = np.linspace(-ARCO, ARCO, ns)
     X, S = np.meshgrid(xs, ss, indexing="ij")

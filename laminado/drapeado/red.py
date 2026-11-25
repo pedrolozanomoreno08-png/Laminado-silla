@@ -141,6 +141,7 @@ def _trazar(consultor, P0, d0, h, n_max, regla, zona=None, darts=None, plano_n=N
             nodos = np.vstack([nodos, resto[1:]])
         return nodos
     prev = P.copy()
+    n_ant = consultor.proyectar(P[None])[1][0]
     for _ in range(n_max * sub * 3):
         X = P + d * ds
         if regla == "plano":
@@ -159,7 +160,12 @@ def _trazar(consultor, P0, d0, h, n_max, regla, zona=None, darts=None, plano_n=N
         if Lp < 1e-12:
             break
         if regla == "geodesica":
-            dn = paso / Lp
+            # transporte paralelo de la dirección (giro mínimo que lleva la normal anterior a la
+            # nueva): geodésica de la superficie suavizada, sin acumular el ruido lateral que
+            # produce el paso por las aristas de la malla
+            v = np.cross(n_ant, n)
+            cth = float(n_ant @ n)
+            dn = d * cth + np.cross(v, d) + v * (v @ d) / (1.0 + cth) if cth > -0.99 else paso / Lp
         elif regla == "plano":
             dn = np.cross(plano_n, n)
             if dn @ d < 0:
@@ -175,6 +181,7 @@ def _trazar(consultor, P0, d0, h, n_max, regla, zona=None, darts=None, plano_n=N
         if nd < 1e-9:
             break
         d = dn / nd
+        n_ant = n
         prev, P = P, Q
         if np.linalg.norm(P - nodos[-1]) >= h:
             # bisección en el último tramo para que la cuerda sea exactamente h
@@ -241,22 +248,38 @@ def _seguir_curva(consultor, P0, d0, h, n_max, curva):
     return np.array(nodos)
 
 
-def resolver_nodos(consultor, A, B, C, h, iters=20):
-    """Resuelve vectorizado X sobre la superficie con |X−A| = |X−B| = h, cerca de A+B−C."""
+def resolver_nodos(consultor, A, B, C, h, iters=25):
+    """Resuelve vectorizado X sobre la superficie con |X−A| = |X−B| = h, cerca de A+B−C.
+
+    Newton en el plano tangente + proyección. Se itera hasta la precisión de máquina donde es
+    posible (los errores de un nodo se heredan en los siguientes) y se guarda la mejor solución
+    de cada nodo; un nodo se acepta si su error final es menor que 5·10⁻³·h (sobre aristas
+    vivas la superficie es facetada y no siempre se puede bajar más)."""
     X0 = A + B - C
     X, n, _, _ = consultor.proyectar(X0)
-    conv = np.zeros(len(A), bool)
+    mejor_X = X.copy()
+    mejor_n = n.copy()
+    mejor_e = np.full(len(A), np.inf)
+    act = np.arange(len(A))
     for _ in range(iters):
-        t1, t2 = base_tangente(n)
-        ra = X - A
-        rb = X - B
+        if len(act) == 0:
+            break
+        Xa, na_, Aa, Ba = X[act], n[act], A[act], B[act]
+        ra = Xa - Aa
+        rb = Xa - Ba
         la = np.linalg.norm(ra, axis=1)
         lb = np.linalg.norm(rb, axis=1)
         f = np.stack([la - h, lb - h], 1)
-        conv = np.abs(f).max(1) < 5e-3 * h      # 25 µm con h = 5 mm (sobre aristas vivas no se
-        #                                         puede exigir más: la superficie es facetada)
-        if conv.all():
+        e = np.abs(f).max(1)
+        mej = e < mejor_e[act]
+        mejor_e[act[mej]] = e[mej]
+        mejor_X[act[mej]] = Xa[mej]
+        mejor_n[act[mej]] = na_[mej]
+        sigue = e > 1e-9 * h
+        act, Xa, na_, f, ra, rb, la, lb = act[sigue], Xa[sigue], na_[sigue], f[sigue], ra[sigue], rb[sigue], la[sigue], lb[sigue]
+        if len(act) == 0:
             break
+        t1, t2 = base_tangente(na_)
         ga = ra / la[:, None]
         gb = rb / lb[:, None]
         J = np.stack([np.stack([(ga * t1).sum(1), (ga * t2).sum(1)], 1),
@@ -266,12 +289,14 @@ def resolver_nodos(consultor, A, B, C, h, iters=20):
         du = (-f[:, 0] * J[:, 1, 1] + f[:, 1] * J[:, 0, 1]) / det
         dv = (-f[:, 1] * J[:, 0, 0] + f[:, 0] * J[:, 1, 0]) / det
         paso = du[:, None] * t1 + dv[:, None] * t2
-        # limitar el paso para estabilidad
         lp = np.linalg.norm(paso, axis=1, keepdims=True)
         paso = np.where(lp > 0.5 * h, paso * (0.5 * h / np.maximum(lp, 1e-300)), paso)
-        X, n, _, _ = consultor.proyectar(X + paso)
-    _, _, en, dist = consultor.proyectar(X)
-    return X, n, conv, en & (dist > 1e-3 * h)
+        Xn, nn, _, _ = consultor.proyectar(Xa + paso)
+        X[act] = Xn
+        n[act] = nn
+    conv = mejor_e < 5e-3 * h
+    _, _, en, dist = consultor.proyectar(mejor_X)
+    return mejor_X, mejor_n, conv, en & (dist > 1e-3 * h)
 
 
 def drapear_red(consultor: Consultor, semilla, direccion, h, estrategia="geodesica",

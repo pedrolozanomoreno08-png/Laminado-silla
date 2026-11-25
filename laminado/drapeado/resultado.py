@@ -197,6 +197,7 @@ class ResultadoDrapeado:
     origen_vertice: np.ndarray | None = None   # vértice de la malla sin rendijas
     darts: list = field(default_factory=list)
     info: dict = field(default_factory=dict)
+    de_red: np.ndarray | None = None          # vértices cuyas (u, v) salen directamente de la red
 
     # ----------------------------------------------------------- campos por cara
     def gradientes(self):
@@ -220,14 +221,24 @@ class ResultadoDrapeado:
         return a / np.maximum(na, 1e-300), b / np.maximum(nb, 1e-300)
 
     def cizalla(self):
-        """Ángulo de cizalla por cara (grados, con signo): 90° − ángulo entre hilos."""
+        """Ángulo de cizalla por cara (grados, con signo): 90° − ángulo entre hilos.
+
+        Donde el tejido viene directamente de la red cinemática, se interpola la cizalla de los
+        nodos de la red en la posición de tejido (u, v) de la cara (exacta y sin el ruido que
+        introduce derivar dentro de una celda). En el resto (mínima energía, zonas completadas,
+        piezas) se usa el gradiente de (u, v) en el triángulo."""
         a, b, det = self.gradientes()
-        n = self.malla.face_normals
         ea, eb = self.fibras()
         cosg = (ea * eb).sum(1)
         g = np.degrees(np.arcsin(np.clip(cosg, -1, 1)))
         g = np.where(det <= 0, 90.0, g)          # cara invertida: pliegue
-        del n
+        if self.red is not None and self.de_red is not None:
+            caras = self.de_red[self.malla.F].all(1) & (det > 0)
+            if caras.any():
+                gi = _interpolar_red(self.red, self.uv[self.malla.F[caras]].mean(1))
+                ok = np.isfinite(gi)
+                idx = np.nonzero(caras)[0][ok]
+                g[idx] = np.sign(g[idx] + 1e-12) * gi[ok]
         return g
 
     def deformaciones(self):
@@ -285,6 +296,25 @@ class ResultadoDrapeado:
         if limite is not None:
             out["area_limite_%"] = float(100 * A[g > limite].sum() / A.sum())
         return out
+
+
+def _interpolar_red(red, uv):
+    """Interpolación bilineal de la cizalla nodal de la red en coordenadas de tejido (mm)."""
+    if not hasattr(red, "_cizalla_nodos"):
+        red._cizalla_nodos = red.angulo_cizalla()
+    gn = red._cizalla_nodos
+    a = uv[:, 0] / red.h + red.i0
+    b = uv[:, 1] / red.h + red.j0
+    i = np.floor(a).astype(int)
+    j = np.floor(b).astype(int)
+    ni, nj = gn.shape
+    dentro = (i >= 0) & (j >= 0) & (i < ni - 1) & (j < nj - 1)
+    out = np.full(len(uv), np.nan)
+    i, j, s, t = i[dentro], j[dentro], (a - np.floor(a))[dentro], (b - np.floor(b))[dentro]
+    v = ((1 - s) * (1 - t) * gn[i, j] + s * (1 - t) * gn[i + 1, j] + (1 - s) * t * gn[i, j + 1]
+         + s * t * gn[i + 1, j + 1])
+    out[dentro] = v
+    return out
 
 
 def _area(p):
