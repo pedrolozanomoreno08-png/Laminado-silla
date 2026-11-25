@@ -39,6 +39,9 @@ class OpcionesCobertura:
     criterio: str = "aviso"          # cizalla admisible en el parche: "aviso" o "limite"
     estrategia: str = "geodesica"
     selecciones: list = field(default_factory=list)   # zona a cubrir (vacía = todo el molde)
+    regiones: list = field(default_factory=list)      # selecciones que se intentan cubrir con un
+                                                      # parche cada una (p.ej. cada tubo) antes de
+                                                      # rellenar lo que quede con parches automáticos
     prefijo: str = "C"
     secuencia: str = ""
     max_parches: int = 120
@@ -303,15 +306,40 @@ class Cubridor:
         d2 = fast_marching(m, vn, limite=r * 1.5)
         return mascara & (d2[m.F].max(1) <= r * 1.05)
 
-    def _probar(self, nombre, semilla_v, radio):
-        """Drapea un parche desde la semilla; devuelve (capa, caras bien cubiertas) o (None, None)."""
+    def _dilatar(self, mascara, r):
+        m = self.m
+        v = np.zeros(m.nv, bool)
+        v[m.F[mascara].ravel()] = True
+        d = fast_marching(m, v, limite=r * 1.2)
+        return d[m.F].max(1) <= r
+
+    def _semilla_en(self, zona):
+        """Punto de la zona más alejado de su borde (centro del tubo o del panel)."""
+        m = self.m
+        sub, ids, _ = m.submalla(zona)
+        b = sub.boundary_vertices_mask
+        if not b.any():
+            return int(ids[0])
+        d = fast_marching(sub, b)
+        d = np.where(np.isfinite(d), d, -1)
+        return int(ids[int(np.argmax(d))])
+
+    def _probar(self, nombre, semilla_v, radio, zona=None):
+        """Drapea un parche desde la semilla; devuelve (capa, caras bien cubiertas) o (None, None).
+
+        Sin ``zona``: entorno geodésico de radio ``radio``. Con ``zona`` (máscara de caras): el
+        parche es esa zona más el solape."""
         m = self.m
         op = self.op
         arista = float(np.median(m.edge_lengths))
         margen = max(4 * arista, 6.0)
         dh = self._distancia_hueco(op.solape + margen * 1.5)
-        dist = fast_marching(m, [semilla_v], limite=radio * 1.05)
-        entorno = (dist[m.F].max(1) <= radio) & (dh <= op.solape + margen)
+        if zona is None:
+            dist = fast_marching(m, [semilla_v], limite=radio * 1.05)
+            entorno = (dist[m.F].max(1) <= radio) & (dh <= op.solape + margen)
+        else:
+            zona_s = self._dilatar(zona, op.solape)
+            entorno = self._dilatar(zona, op.solape + margen) & (dh <= op.solape + margen)
         if entorno.sum() < 4:
             return None, None
         P = m.V[semilla_v]
@@ -348,6 +376,8 @@ class Cubridor:
         util = _componente_con(self.A, bien, f0)
         # parche: hueco + solape sobre lo ya cubierto, sin salientes ni tiras finas
         parche = util & (dh <= op.solape)
+        if zona is not None:
+            parche &= zona_s
         parche = self._abrir(parche, max(0.4 * op.solape, 2 * arista))
         hueco = ~self.cubierto
         if not (parche & hueco).any():
@@ -381,6 +411,43 @@ class Cubridor:
         excluidas = np.zeros(m.nf, bool)
         radio = {}
         k = 0
+        arista = float(np.median(m.edge_lengths))
+        # 1) un parche por región (tubo, panel…) donde sea producible
+        for nreg in op.regiones:
+            caras = np.asarray(self.p.molde.selecciones.get(nreg, []), int)
+            zona = np.zeros(m.nf, bool)
+            zona[caras] = True
+            zona &= ~self.cubierto
+            if m.face_areas[zona].sum() < 25 * arista ** 2:
+                continue
+            # la mayor componente de la región dentro de la zona a cubrir
+            from scipy.sparse.csgraph import connected_components
+            ids = np.nonzero(zona)[0]
+            ncomp, et = connected_components(self.A[zona][:, zona], directed=False)
+            for kc in np.argsort(-np.bincount(et, weights=m.face_areas[ids], minlength=ncomp)):
+                zc = np.zeros(m.nf, bool)
+                zc[ids[et == kc]] = True
+                a_zc = float(m.face_areas[zc].sum())
+                if a_zc < 25 * arista ** 2:
+                    break
+                sv = self._semilla_en(zc)
+                nombre = self._nombre(k)
+                if self.progreso:
+                    self.progreso(k, float(m.face_areas[~self.cubierto].sum()) / A_obj, f"{nombre} ({nreg})")
+                c, bien = self._probar(nombre, sv, np.inf, zona=zc)
+                nuevo = 0.0 if bien is None else float(m.face_areas[bien & zc & ~self.cubierto].sum())
+                if c is None or nuevo < 0.25 * a_zc:
+                    if c is not None:
+                        self._quitar_capa(c)
+                    continue
+                c.notas = f"Parche de cobertura automática (región {nreg})"
+                self.cubierto |= bien
+                inf.capas.append(c.nombre)
+                self.creadas.append(c)
+                k += 1
+        if op.regiones:
+            self._absorber_migas()
+        # 2) lo que quede, con parches automáticos
         while k < op.max_parches:
             hueco_area = float(m.face_areas[~self.cubierto].sum())
             if hueco_area <= op.hueco_admisible:

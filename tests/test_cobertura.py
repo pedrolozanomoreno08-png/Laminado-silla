@@ -33,6 +33,18 @@ def _tubo_en_t():
     return m if vol > 0 else m.invertida()
 
 
+def selecciones_t(m):
+    """Mitades (molde de dos conchas) y tubos (cada cara al tubo más cercano)."""
+    C = m.face_centroids
+    dh = np.abs(np.linalg.norm(C[:, 1:], axis=1) - 22)
+    t = np.clip(C[:, 2] / 130, 0, 1)
+    dv = np.abs(np.linalg.norm(C - np.c_[0 * t, 0 * t, 130 * t], axis=1) - 16)
+    horiz = dh <= dv
+    izq = C[:, 1] >= 0
+    return {"MITAD_IZQ": np.nonzero(izq)[0], "MITAD_DER": np.nonzero(~izq)[0],
+            "TUBO_H": np.nonzero(horiz)[0], "TUBO_V": np.nonzero(~horiz)[0]}
+
+
 def test_cobertura_completa_nudo_en_t():
     m = _tubo_en_t()
     p = Proyecto("T")
