@@ -38,7 +38,15 @@ def _smin(a, b, k):
     return b + (a - b) * h - k * h * (1 - h)
 
 
-def cuadro_bicicleta(paso=3.5, k=10.0):
+# extremos abiertos de un cuadro real: (tubo, extremo 0=A / 1=B)
+BOCAS = [("TUBO_DIRECCION", 0), ("TUBO_DIRECCION", 1), ("TUBO_SILLIN", 1),
+         ("CAJA_PEDALIER", 0), ("CAJA_PEDALIER", 1)]
+
+
+def cuadro_bicicleta(paso=3.5, k=10.0, abierto=False):
+    """Superficie exterior del cuadro. ``abierto``: con las bocas de la dirección, del tubo de
+    sillín y de la caja de pedalier abiertas (como el molde de un cuadro real), en vez de
+    cerradas con casquetes semiesféricos."""
     import pyvista as pv
     lo = np.array([-440.0, -95.0, -45.0])
     hi = np.array([480.0, 95.0, 600.0])
@@ -64,6 +72,31 @@ def cuadro_bicicleta(paso=3.5, k=10.0):
     vol = np.einsum("ij,ij->i", m.V[m.F[:, 0]], np.cross(m.V[m.F[:, 1]], m.V[m.F[:, 2]])).sum() / 6
     if vol < 0:
         m = m.invertida()
+    if abierto:
+        m = _abrir_bocas(m)
+    return m
+
+
+def _abrir_bocas(m: TriMesh):
+    """Quita los casquetes de los extremos libres (corte plano perpendicular al eje)."""
+    from ..geom.cortes import cortar_por_nivel
+    nombres = [t[0] for t in TUBOS]
+    for nombre, extremo in BOCAS:
+        _, A, B, ra, rb = TUBOS[nombres.index(nombre)]
+        A, B = np.asarray(A, float), np.asarray(B, float)
+        eje = (B - A) / np.linalg.norm(B - A)
+        P = B if extremo else A
+        sentido = eje if extremo else -eje
+        r = rb if extremo else ra
+        # distancia con signo al plano del extremo, sólo cerca del extremo (cilindro de radio 1.6 r)
+        d = (m.V - P) @ sentido
+        radial = np.linalg.norm((m.V - P) - np.outer((m.V - P) @ eje, eje), axis=1)
+        phi = np.where(radial < 1.6 * r, d, -1e3)
+        m2, phi2, _ = cortar_por_nivel(m, phi, 0.0)
+        m = m2.submalla(phi2[m2.F].mean(1) <= 0)[0]
+    nc, et = m.componentes()
+    if nc > 1:
+        m = m.submalla(et == np.argmax(np.bincount(et, weights=m.face_areas)))[0]
     return m
 
 

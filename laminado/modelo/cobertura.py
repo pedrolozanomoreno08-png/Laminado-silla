@@ -154,9 +154,26 @@ class Cubridor:
         self.mat = mat
         self.adm = mat.cizalla_aviso if op.criterio == "aviso" else mat.cizalla_limite
         self.K = None
+        self.errores = []
+        self.creadas = []
 
     # ------------------------------------------------------------------ semillas
+    def _curvatura(self):
+        """|K| suavizada (media en el entorno) para no confundir ruido de malla con curvatura."""
+        if self.K is None:
+            m = self.m
+            K = np.abs(curvatura_gauss(m))
+            A = (m.adyacencia > 0).astype(float) + sp.eye(m.nv)
+            deg = np.asarray(A.sum(1)).ravel()
+            for _ in range(6):
+                K = (A @ K) / deg
+            self.K = K
+        return self.K
+
     def _semilla(self, excluidas):
+        """Centro de la zona sin cubrir: el punto más alejado de su borde y de las zonas de doble
+        curvatura (uniones, cúpulas), donde el tejido se adapta peor; así cada parche empieza en
+        la parte más desarrollable que queda (el centro de un tubo, no la unión)."""
         m = self.m
         hueco = ~self.cubierto
         hueco[excluidas] = False
@@ -168,19 +185,30 @@ class Cubridor:
         vc[m.F[~hueco].ravel()] = True
         borde = (vh & vc) | (vh & m.boundary_vertices_mask)
         sub, ids, _ = m.submalla(hueco)
-        if borde.any():
-            fuentes = np.nonzero(borde[ids])[0]
+        K = self._curvatura()[ids]
+        # curvatura de Gauss que con un parche de 50 mm de radio daría ~la cizalla de aviso
+        k_umbral = 2 * np.tan(np.radians(self.adm)) / 50.0 ** 2
+        curvo = K > k_umbral
+        arista = float(np.median(m.edge_lengths))
+        d = None
+        fuentes = np.nonzero(borde[ids] | curvo)[0]
+        if len(fuentes) and len(fuentes) < sub.nv:
             d = fast_marching(sub, fuentes)
-        else:
-            # superficie cerrada sin nada cubierto: empezar lo más lejos posible de las zonas de
-            # doble curvatura (uniones, cúpulas): allí el tejido se adapta peor
-            if self.K is None:
-                self.K = curvatura_gauss(m)
-            Ks = np.abs(self.K[ids])
-            umbral = np.percentile(Ks, 90)
-            d = fast_marching(sub, np.nonzero(Ks >= umbral)[0])
+            if not np.isfinite(d).any() or np.nanmax(np.where(np.isfinite(d), d, 0)) < 3 * arista:
+                d = None
+        if d is None:
+            fb = np.nonzero(borde[ids])[0]
+            if len(fb):
+                d = fast_marching(sub, fb)
+            else:
+                d = -K           # superficie cerrada y toda curva: el punto menos curvo
         d = np.where(np.isfinite(d), d, -1)
         return int(ids[int(np.argmax(d))])
+
+    def _area_componente_hueco(self, cara):
+        hueco = ~self.cubierto
+        comp = _componente_con(self.A, hueco, cara)
+        return float(self.m.face_areas[comp].sum())
 
     # ------------------------------------------------------------------ drapeado de prueba
     def _crear_capa(self, nombre, caras, semilla_v, eje_dir, normal):
@@ -237,18 +265,53 @@ class Cubridor:
             neto = (phi[r.malla.F].mean(1) <= 1e-9) if phi is not None else np.ones(r.malla.nf, bool)
             buena = (r.cara_cubierta() & (g <= self.adm) & (np.abs(ea) < 0.02) & (np.abs(eb) < 0.02) & neto)
             mejor_aqui = d < mejor
-            ok = np.where(mejor_aqui, buena[f] & (d < 0.5), ok)
+            ok = np.where(mejor_aqui, buena[f] & (d < 0.5 + getattr(rc, "desplazamiento", 0.0)), ok)
             mejor = np.minimum(mejor, d)
         bien[idx] = ok
         return bien
 
+    def _distancia_hueco(self, limite):
+        """Distancia geodésica (por cara, la máxima de sus vértices) a la zona sin cubrir."""
+        m = self.m
+        hueco = ~self.cubierto
+        vh = np.zeros(m.nv, bool)
+        vh[m.F[hueco].ravel()] = True
+        if not (~hueco).any():
+            return np.zeros(m.nf)
+        d = fast_marching(m, vh, limite=limite)
+        return d[m.F].max(1)
+
+    def _abrir(self, mascara, r):
+        """Apertura morfológica (erosión + dilatación de radio r): quita salientes y tiras más
+        estrechas que 2r, que darían recortes imposibles de manejar en el taller."""
+        m = self.m
+        if r <= 0 or not mascara.any():
+            return mascara
+        vin = np.zeros(m.nv, bool)
+        vin[m.F[mascara].ravel()] = True
+        vout = np.zeros(m.nv, bool)
+        vout[m.F[~mascara].ravel()] = True
+        borde = (vin & vout) | (vin & m.boundary_vertices_mask)
+        if not borde.any():
+            return mascara
+        d = fast_marching(m, borde, limite=r * 1.5)
+        nucleo = mascara & (d[m.F].min(1) >= r)
+        if not nucleo.any():
+            return mascara
+        vn = np.zeros(m.nv, bool)
+        vn[m.F[nucleo].ravel()] = True
+        d2 = fast_marching(m, vn, limite=r * 1.5)
+        return mascara & (d2[m.F].max(1) <= r * 1.05)
+
     def _probar(self, nombre, semilla_v, radio):
-        """Drapea un parche desde la semilla; devuelve (capa, caras útiles) o (None, None)."""
+        """Drapea un parche desde la semilla; devuelve (capa, caras bien cubiertas) o (None, None)."""
         m = self.m
         op = self.op
+        arista = float(np.median(m.edge_lengths))
+        margen = max(4 * arista, 6.0)
+        dh = self._distancia_hueco(op.solape + margen * 1.5)
         dist = fast_marching(m, [semilla_v], limite=radio * 1.05)
-        dcara = dist[m.F].max(1)
-        entorno = dcara <= radio
+        entorno = (dist[m.F].max(1) <= radio) & (dh <= op.solape + margen)
         if entorno.sum() < 4:
             return None, None
         P = m.V[semilla_v]
@@ -266,40 +329,42 @@ class Cubridor:
             eje = np.cross(nrm, [0, 0, 1.0]) if abs(nrm[2]) < 0.9 else np.cross(nrm, [1.0, 0, 0])
         eje /= np.linalg.norm(eje)
         c = self._crear_capa(nombre, entorno, semilla_v, eje, nrm)
+        c.relleno = False            # drapeado de prueba: sólo interesa lo que la red alcanza
         self.p.capas.append(c)
         try:
             rc = self.p.simular(c)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            tb = traceback.extract_tb(e.__traceback__)[-1]
+            self.errores.append(f"{nombre}: {type(e).__name__}: {e} ({tb.filename.split('/')[-1]}:{tb.lineno})")
             self._quitar_capa(c)
             return None, None
         bien = self._caras_bien(rc, entorno)
-        f0 = int(self.m.vertice_caras.tocsr()[semilla_v].indices[0])
-        caras_semilla = self.m.vertice_caras.tocsr()[semilla_v].indices
-        f0 = next((int(f) for f in caras_semilla if bien[f]), f0)
+        caras_semilla = m.vertice_caras.tocsr()[semilla_v].indices
+        f0 = next((int(f) for f in caras_semilla if bien[f]), int(caras_semilla[0]))
         util = _componente_con(self.A, bien, f0)
-        # parche: hueco + solape sobre lo ya cubierto
+        # parche: hueco + solape sobre lo ya cubierto, sin salientes ni tiras finas
+        parche = util & (dh <= op.solape)
+        parche = self._abrir(parche, max(0.4 * op.solape, 2 * arista))
         hueco = ~self.cubierto
-        vh = np.zeros(m.nv, bool)
-        vh[m.F[hueco].ravel()] = True
-        if op.solape > 0 and (~hueco).any():
-            dh = fast_marching(m, vh, limite=op.solape * 1.2)
-            cerca_hueco = dh[m.F].max(1) <= op.solape
-        else:
-            cerca_hueco = hueco
-        parche = util & (cerca_hueco | hueco)
-        if not parche.any():
+        if not (parche & hueco).any():
             self._quitar_capa(c)
             return None, None
-        parche = _componente_con(self.A, parche, next((int(f) for f in np.nonzero(parche & hueco)[0]), int(np.argmax(parche))))
+        parche = _componente_con(self.A, parche, int(np.nonzero(parche & hueco)[0][0]))
         parche = _cerrar_agujeros(self.A, m, parche, area_max=0.02 * m.face_areas[parche].sum() + 50.0)
-        # la capa definitiva: sólo el parche
+        # la capa definitiva: sólo el parche, con el borde suavizado (sin escalones de malla)
         self.p.molde.selecciones[c.contorno.selecciones[0]] = np.nonzero(parche)[0]
+        c.contorno.suavizado = max(1.5 * arista, 3.0)
+        c.relleno = True
         try:
             rc = self.p.simular(c)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            import traceback
+            tb = traceback.extract_tb(e.__traceback__)[-1]
+            self.errores.append(f"{nombre}: {type(e).__name__}: {e} ({tb.filename.split('/')[-1]}:{tb.lineno})")
             self._quitar_capa(c)
             return None, None
-        bien2 = self._caras_bien(rc, parche)
+        bien2 = self._caras_bien(rc, parche | (dh <= op.solape))
         return c, bien2
 
     # ------------------------------------------------------------------ bucle
@@ -323,7 +388,9 @@ class Cubridor:
                 self.progreso(k, hueco_area / A_obj, nombre)
             c, bien = self._probar(nombre, sv, r)
             nuevo = 0.0 if bien is None else float(m.face_areas[bien & ~self.cubierto].sum())
-            minimo = min(0.25 * np.pi * r * r * 0.05, 0.5 * hueco_area)
+            caras_sv = m.vertice_caras.tocsr()[sv].indices
+            f_h = next((int(f) for f in caras_sv if not self.cubierto[f]), int(caras_sv[0]))
+            minimo = min(0.25 * np.pi * r * r * 0.05, 0.5 * self._area_componente_hueco(f_h))
             if c is None or nuevo < max(minimo, 1e-9):
                 if c is not None:
                     self._quitar_capa(c)
@@ -339,13 +406,72 @@ class Cubridor:
                     continue
                 inf.no_producibles.append(nombre)
             self.cubierto |= bien
-            # lo que la capa declara (su selección) también deja de buscarse como semilla
             inf.capas.append(c.nombre)
+            self.creadas.append(c)
             k += 1
+            self._absorber_migas()
         hueco = ~self.cubierto
         inf.hueco_mm2 = float(m.face_areas[hueco].sum())
         inf.cobertura_pct = 100.0 * (1 - inf.hueco_mm2 / max(A_obj, 1e-300))
+        inf.notas += [f"Error de cálculo en {e}" for e in self.errores[:5]]
         return inf
+
+    def _absorber_migas(self):
+        """Las islas pequeñas sin cubrir que quedan entre parches se añaden al parche vecino
+        (ampliándolo un poco) en vez de crear parches diminutos."""
+        from scipy.sparse.csgraph import connected_components
+        m, op = self.m, self.op
+        arista = float(np.median(m.edge_lengths))
+        a_miga = max(2.0 * op.solape ** 2, 25 * arista ** 2)
+        hueco = ~self.cubierto
+        if not hueco.any() or not self.creadas:
+            return
+        ids = np.nonzero(hueco)[0]
+        n, et = connected_components(self.A[hueco][:, hueco], directed=False)
+        areas = np.bincount(et, weights=m.face_areas[ids], minlength=n)
+        for k in np.argsort(areas):
+            if areas[k] > a_miga:
+                break
+            comp = np.zeros(m.nf, bool)
+            comp[ids[et == k]] = True
+            if not (comp & ~self.cubierto).any():
+                continue
+            vz = np.zeros(m.nv, bool)
+            vz[m.F[comp].ravel()] = True
+            d = fast_marching(m, vz, limite=op.solape * 1.2)
+            dc = d[m.F].max(1)
+            cerca = dc <= op.solape
+            mejor, mejor_a = None, 0.0
+            for c in self.creadas:
+                sel = np.zeros(m.nf, bool)
+                sel[self.p.molde.selecciones[c.contorno.selecciones[0]]] = True
+                a = float(m.face_areas[sel & cerca].sum())
+                if a > mejor_a:
+                    mejor, mejor_a = c, a
+            if mejor is None:
+                continue
+            nsel = mejor.contorno.selecciones[0]
+            vieja = self.p.molde.selecciones[nsel]
+            viejo_rc = self.p.resultados.get(mejor.nombre)
+            nueva = np.zeros(m.nf, bool)
+            nueva[vieja] = True
+            nueva |= comp | (dc <= 0.5 * op.solape)
+            nueva = _cerrar_agujeros(self.A, m, nueva, area_max=a_miga)
+            self.p.molde.selecciones[nsel] = np.nonzero(nueva)[0]
+            ok = False
+            try:
+                rc = self.p.simular(mejor)
+                bien = self._caras_bien(rc, nueva)
+                ok = (rc.resumen.get("estado") != "ROJO"
+                      and m.face_areas[bien & comp].sum() >= 0.98 * m.face_areas[comp].sum())
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok:
+                self.cubierto |= bien
+            else:
+                self.p.molde.selecciones[nsel] = vieja
+                if viejo_rc is not None:
+                    self.p.resultados[mejor.nombre] = viejo_rc
 
     def _nombre(self, k):
         existentes = {c.nombre for c in self.p.capas}
@@ -392,8 +518,8 @@ def mapa_cobertura(proyecto, capas=None):
         if capas is not None and c.nombre not in capas:
             continue
         rc = proyecto.resultados[c.nombre]
-        lo = rc.neto.V.min(0) - 1.0
-        hi = rc.neto.V.max(0) + 1.0
+        lo = rc.neto.V.min(0) - 1.0 - rc.desplazamiento
+        hi = rc.neto.V.max(0) + 1.0 + rc.desplazamiento
         cand = np.nonzero(((C >= lo) & (C <= hi)).all(1))[0]
         if not len(cand):
             continue
@@ -405,7 +531,7 @@ def mapa_cobertura(proyecto, capas=None):
             neto = (phi[r.malla.F].mean(1) <= 1e-9) if phi is not None else np.ones(r.malla.nf, bool)
             ok = r.cara_cubierta() & neto
             mejor = d < dmin
-            cub = np.where(mejor, ok[f] & (d < 0.5), cub)
+            cub = np.where(mejor, ok[f] & (d < 0.5 + getattr(rc, "desplazamiento", 0.0)), cub)
             dmin = np.minimum(dmin, d)
         n[cand[cub]] += 1
     return n

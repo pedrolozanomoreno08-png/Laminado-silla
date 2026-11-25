@@ -391,9 +391,24 @@ class PanelProyecto(PanelBase):
         self.nombre = self._conectar(QtWidgets.QLineEdit(proyecto.nombre), "nombre")
         self.h = self._conectar(_num(proyecto.h, 1, 50, 1, "mm"), "drapeado")
         self.ext = self._conectar(_num(proyecto.extension, 0, 500, 0, "mm"), "geometria")
+        self.espesor = self._conectar(QtWidgets.QCheckBox("Drapear cada capa sobre las anteriores (espesor real)"),
+                                      "drapeado")
+        self.espesor.setChecked(bool(proyecto.drapeado_con_espesor))
+        self.espesor.setToolTip("Cada capa se drapea sobre la superficie desplazada por el espesor de las capas y "
+                                "núcleos que tiene debajo: las capas exteriores desarrollan más y los patrones "
+                                "planos salen a su medida real.")
+        self.sentido = QtWidgets.QComboBox()
+        self.sentido.addItems(["Según la normal del molde", "Contra la normal del molde"])
+        self.sentido.setCurrentIndex(0 if proyecto.sentido_laminado >= 0 else 1)
+        self.sentido = self._conectar(self.sentido, "drapeado")
+        self.rampa = self._conectar(_num(proyecto.rampa, 1, 200, 0, "× espesor"), "drapeado")
+        self.rampa.setToolTip("Longitud de la rampa en el borde de cada capa (terminación), en múltiplos de su espesor")
         self.form.addRow("Nombre", self.nombre)
         self.form.addRow("Celda de red por defecto", self.h)
         self.form.addRow("Superficie extendida", self.ext)
+        self.form.addRow("", self.espesor)
+        self.form.addRow("Sentido de crecimiento del laminado", self.sentido)
+        self.form.addRow("Rampa de terminación de capa", self.rampa)
         if proyecto.molde is not None:
             m = proyecto.malla
             info = (f"{proyecto.molde.origen}\n{m.nv} nodos, {m.nf} triángulos, área {m.area / 1e6:.4f} m²\n"
@@ -408,6 +423,9 @@ class PanelProyecto(PanelBase):
     def aplicar(self):
         self.p.nombre = self.nombre.text().strip() or self.p.nombre
         self.p.h = self.h.value()
+        self.p.drapeado_con_espesor = self.espesor.isChecked()
+        self.p.sentido_laminado = 1.0 if self.sentido.currentIndex() == 0 else -1.0
+        self.p.rampa = self.rampa.value()
         if self.ext.value() != self.p.extension:
             self.p.extension = self.ext.value()
             self.p._ext = None
