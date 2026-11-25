@@ -27,7 +27,7 @@ ansys-mapdl-reader (opcional, .rst), pytest, pyinstaller.
   core sample, espesores, proyecto .lam.
 - `salidas/` DXF, anidado (ráster + FFT), láser, ply book PDF, Excel, tablas ACP, `todo.py`.
 - `gui/` ventana Qt + VTK con picado por clic derecho; `python -m laminado --demo`.
-- 26 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
+- 29 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
   el .exe de Windows (artefacto LaminadoStudio-windows).
 - `verificacion/`: esfera analítica, invariancias, archivos Ansys reales, class40, salidas,
   recorrido completo de la interfaz (`recorrido_gui.py`) y regresión de ejemplos
@@ -39,6 +39,10 @@ ansys-mapdl-reader (opcional, .rst), pytest, pyinstaller.
   (molde macho/hembra); exacto en semicilindro (ancho plano π(R+k·e)); salida superficie_laminado.stl.
 - `modelo/cobertura.py`: cobertura completa automática con parches producibles (regiones por tubo,
   relleno voraz, migas absorbidas, roseta por eje local); modo de color «Cobertura (nº de capas)».
+  `exceso_borde` (contorno): la selección sigue por la superficie extendida en bordes libres (sin
+  rendijas en esquinas suavizadas). Modo `completar`: relanzar sobre una secuencia existente sólo
+  cubre lo que falta; comprobación final con el tejido real y parche de cierre en cada hueco
+  (con darts si sale rojo).
   Ejemplo: cuadro de bicicleta completo (4 secuencias, 100 % cubierto, ningún parche rojo).
 - Piezas grandes y planas: red limitada a ~200 000 nodos donde la curvatura lo permite (en class40
   la cizalla pico local baja de 27° a 20°; el área sobre aviso sigue en ~0 %).
