@@ -306,8 +306,15 @@ class Proyecto:
             if not caras.any():
                 raise ValueError("La selección del contorno está vacía")
             phi = distancia_a_borde_region(ext, caras)
-            if contorno.suavizado > 0:
-                phi = suavizar_campo(ext, phi, contorno.suavizado)
+            sv = contorno.suavizado
+            a0 = float(ext.face_areas[caras].sum())
+            while sv > 0.25:
+                # el suavizado no debe comerse la selección (zonas estrechas): se reduce si hace falta
+                ps = suavizar_campo(ext, phi, sv)
+                a1 = float(ext.face_areas[ps[ext.F].mean(1) <= 0].sum())
+                if a1 >= 0.9 * a0:
+                    return ps
+                sv /= 2
             return phi
         if contorno.tipo == "poligono":
             from shapely.geometry import Point, Polygon
@@ -416,6 +423,12 @@ class Proyecto:
         else:
             sub, ids, _ = m1.submalla(neto_caras)
             phi_sub, desp_sub = phi1[ids], d1[ids]
+        if sub.nf == 0:
+            import os
+            if os.environ.get("LAMINADO_DEBUG"):
+                print("REGION VACIA", c.tipo, c.selecciones, [len(self.molde.selecciones.get(n, [])) for n in c.selecciones],
+                      "phi min", float(np.min(phi)), "desf", desf, "suav", c.suavizado, "ext", ext.nf, flush=True)
+            raise ValueError("El contorno de la capa no contiene superficie")
         # quedarse con la componente conexa mayor
         nc, et = sub.componentes()
         if nc > 1:

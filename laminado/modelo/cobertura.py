@@ -334,7 +334,10 @@ class Cubridor:
         try:
             rc = self.p.simular(c)
         except Exception as e:  # noqa: BLE001
+            import os
             import traceback
+            if os.environ.get("LAMINADO_DEBUG"):
+                traceback.print_exc()
             tb = traceback.extract_tb(e.__traceback__)[-1]
             self.errores.append(f"{nombre}: {type(e).__name__}: {e} ({tb.filename.split('/')[-1]}:{tb.lineno})")
             self._quitar_capa(c)
@@ -354,12 +357,15 @@ class Cubridor:
         parche = _cerrar_agujeros(self.A, m, parche, area_max=0.02 * m.face_areas[parche].sum() + 50.0)
         # la capa definitiva: sólo el parche, con el borde suavizado (sin escalones de malla)
         self.p.molde.selecciones[c.contorno.selecciones[0]] = np.nonzero(parche)[0]
-        c.contorno.suavizado = max(1.5 * arista, 3.0)
+        c.contorno.suavizado = max(1.0 * arista, 2.0)
         c.relleno = True
         try:
             rc = self.p.simular(c)
         except Exception as e:  # noqa: BLE001
+            import os
             import traceback
+            if os.environ.get("LAMINADO_DEBUG"):
+                traceback.print_exc()
             tb = traceback.extract_tb(e.__traceback__)[-1]
             self.errores.append(f"{nombre}: {type(e).__name__}: {e} ({tb.filename.split('/')[-1]}:{tb.lineno})")
             self._quitar_capa(c)
