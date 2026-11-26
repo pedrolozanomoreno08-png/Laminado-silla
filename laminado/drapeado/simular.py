@@ -68,6 +68,15 @@ def preparar_darts(malla: TriMesh, darts):
     return m, origen, ajustados
 
 
+def _fraccion_plegada(m: TriMesh, uv) -> float:
+    """Fracción del área de la malla con el patrón plano invertido o aplastado (pliegue)."""
+    _, _, det = ResultadoDrapeado(m, uv, np.ones(m.nv, bool)).gradientes()
+    A = m.face_areas
+    # det = 2·área plana del triángulo: aplastado si es < 10 % del área en 3D
+    malos = det <= 0.2 * A
+    return float(A[malos].sum() / max(A.sum(), 1e-300))
+
+
 def _uv_conformal(m: TriMesh, sv: int, d0) -> np.ndarray:
     """Aplanado conformal de la malla con la urdimbre (eje u) en la dirección ``d0`` en el
     vértice ``sv`` y el origen en él."""
@@ -142,6 +151,13 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
     if estr == "energia" or (darts_aj and opciones.relajar_darts):
         # mínima energía (o relajación de la malla con rendijas para que los darts se abran)
         uv, inf = drapear_energia(m, uv, sv, d0, max_iter=opciones.max_iter_energia, **kw)
+        if _fraccion_plegada(m, uv) > 0.02:
+            # el punto de partida (red + prolongación) ha llevado a un pliegue: se repite desde
+            # el aplanado conformal y se queda la solución menos plegada
+            uv_c, inf_c = drapear_energia(m, _uv_conformal(m, sv, d0), sv, d0,
+                                          max_iter=opciones.max_iter_energia, **kw)
+            if _fraccion_plegada(m, uv_c) < _fraccion_plegada(m, uv):
+                uv, inf = uv_c, dict(inf_c, inicio_conformal=True)
         uv -= uv[sv]
         info.update(inf)
         # la solución por energía cubre toda la capa (la producibilidad la da la cizalla)
