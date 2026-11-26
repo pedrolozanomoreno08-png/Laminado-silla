@@ -83,3 +83,32 @@ def test_empalmes_por_ancho(medio_cilindro):
     assert all(np.ptp(p.uv[:, 1]) <= 200.0 for p in piezas)
     # el solape hace que la suma de áreas supere al total
     assert sum(p.area_plana() for p in piezas) > r.area_plana()
+
+
+def test_inicio_conformal_orientado():
+    """Pieza que la red no alcanza: el aplanado conformal de partida conserva el área, no está
+    reflejado y tiene la urdimbre en la dirección de la capa (antes el patrón era un punto)."""
+    from laminado.drapeado.simular import _uv_conformal
+    from laminado.drapeado.resultado import ResultadoDrapeado
+    from laminado.geom.malla import TriMesh
+    n, R = 12, 8.0                                  # trozo de cilindro pequeño y muy curvo
+    th, x = np.meshgrid(np.linspace(0, 1.2, n), np.linspace(0, 10, n), indexing="ij")
+    V = np.c_[x.ravel(), R * np.cos(th).ravel(), R * np.sin(th).ravel()]
+    idx = np.arange(n * n).reshape(n, n)
+    a, b, c, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+    m = TriMesh(V, np.vstack([np.c_[a, b, c], np.c_[a, c, d]]))
+    sv = idx[n // 2, n // 2]
+    for ang in (0.0, 45.0, 90.0):
+        # dirección tangente en sv: combinación del eje del cilindro y la circunferencial
+        t_ax = np.array([1.0, 0, 0])
+        t_ci = np.array([0, -np.sin(th.ravel()[sv]), np.cos(th.ravel()[sv])])
+        d0 = np.cos(np.radians(ang)) * t_ax + np.sin(np.radians(ang)) * t_ci
+        uv = _uv_conformal(m, sv, d0)
+        r = ResultadoDrapeado(m, uv, np.ones(m.nv, bool))
+        assert abs(r.area_plana() - m.area) < 0.01 * m.area
+        ga, gb, det = r.gradientes()
+        assert (det > 0).all()
+        caras = np.nonzero((m.F == sv).any(1))[0]
+        ea = ga[caras] / np.linalg.norm(ga[caras], axis=1, keepdims=True)
+        assert (ea @ d0).min() > 0.99, ang
+        assert np.allclose(uv[sv], 0)

@@ -68,6 +68,26 @@ def preparar_darts(malla: TriMesh, darts):
     return m, origen, ajustados
 
 
+def _uv_conformal(m: TriMesh, sv: int, d0) -> np.ndarray:
+    """Aplanado conformal de la malla con la urdimbre (eje u) en la dirección ``d0`` en el
+    vértice ``sv`` y el origen en él."""
+    from ..geom.parametrizacion import lscm
+    uv = lscm(m)
+    a, b, det = ResultadoDrapeado(m, uv, np.ones(m.nv, bool)).gradientes()
+    if (det < 0).sum() > (det > 0).sum():               # aplanado reflejado
+        uv[:, 1] *= -1
+        a, b, det = ResultadoDrapeado(m, uv, np.ones(m.nv, bool)).gradientes()
+    caras = np.nonzero((m.F == sv).any(1))[0]
+    buenas = caras[det[caras] > 0]
+    f = (buenas if len(buenas) else caras)[np.argmax(m.face_areas[buenas if len(buenas) else caras])]
+    # dirección en el plano (du, dv) cuya imagen 3D es d0:  [a b]·(du, dv) = d0
+    x = np.linalg.lstsq(np.c_[a[f], b[f]], np.asarray(d0, float), rcond=None)[0]
+    ang = np.arctan2(x[1], x[0])
+    c, s = np.cos(ang), np.sin(ang)
+    uv = np.c_[c * uv[:, 0] + s * uv[:, 1], -s * uv[:, 0] + c * uv[:, 1]]
+    return uv - uv[sv]
+
+
 def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direccion,
                  opciones: OpcionesDrapeado, darts=None) -> ResultadoDrapeado:
     """Drapea una capa (malla ya recortada a su contorno) sobre el molde (superficie extendida)."""
@@ -98,6 +118,16 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
         uv0, cub0, _ = mapear_red(red, malla_capa)
         uv, cubierto = uv0[origen], cub0[origen]
     info = {"nodos_red": int(red.ok.sum())}
+    sv = int(np.argmin(np.linalg.norm(m.V - P0, axis=1)))
+    n0 = consultor_molde.proyectar(P0[None])[1]
+    d0 = proyectar_tangente(np.asarray(direccion, float)[None], n0)[0]
+    if cubierto.sum() < 3:
+        # pieza pequeña en una zona muy curva: ninguna cara cae dentro de la red (todas las (u, v)
+        # valdrían 0 y el patrón plano sería un punto). Punto de partida conformal (LSCM) girado
+        # para que la urdimbre siga la dirección de la capa en la semilla; la energía lo ajusta.
+        uv = _uv_conformal(m, sv, d0)
+        cubierto = np.zeros(m.nv, bool)
+        info["inicio_conformal"] = True
     de_red = cubierto.copy()
     if not cubierto.all() and cubierto.sum() >= 3:
         # punto de partida de las zonas no alcanzadas: el tejido se prolonga desde la zona
@@ -107,9 +137,6 @@ def simular_capa(malla_capa: TriMesh, consultor_molde: Consultor, semilla, direc
             uv = prolongar(m, uv, cubierto)
         except Exception:  # noqa: BLE001
             pass
-    sv = int(np.argmin(np.linalg.norm(m.V - P0, axis=1)))
-    n0 = consultor_molde.proyectar(P0[None])[1]
-    d0 = proyectar_tangente(np.asarray(direccion, float)[None], n0)[0]
     kw = dict(k_t=opciones.k_t, k_s=opciones.k_s,
               k_t_trama=opciones.k_t * (0.05 if opciones.unidireccional else 1.0))
     if estr == "energia" or (darts_aj and opciones.relajar_darts):
