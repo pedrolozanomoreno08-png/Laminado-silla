@@ -27,7 +27,7 @@ ansys-mapdl-reader (opcional, .rst), pytest, pyinstaller.
   core sample, espesores, proyecto .lam.
 - `salidas/` DXF, anidado (ráster + FFT), láser, ply book PDF, Excel, tablas ACP, `todo.py`.
 - `gui/` ventana Qt + VTK con picado por clic derecho; `python -m laminado --demo`.
-- 29 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
+- 30 pruebas pytest (incluye archivos Ansys reales, CLT de libro, empalmes); CI en GitHub compila
   el .exe de Windows (artefacto LaminadoStudio-windows).
 - `verificacion/`: esfera analítica, invariancias, archivos Ansys reales, class40, salidas,
   recorrido completo de la interfaz (`recorrido_gui.py`) y regresión de ejemplos
@@ -43,13 +43,17 @@ ansys-mapdl-reader (opcional, .rst), pytest, pyinstaller.
   rendijas en esquinas suavizadas). Modo `completar`: relanzar sobre una secuencia existente sólo
   cubre lo que falta; comprobación final con el tejido real y parche de cierre en cada hueco
   (con darts si sale rojo).
-  Ejemplo: cuadro de bicicleta completo (4 secuencias, 100 % cubierto, ningún parche rojo).
+  Ejemplo: cuadro de bicicleta completo (4 secuencias, 556 parches; hueco residual ≤0,72 mm² en
+  astillas de malla; 31 parches pequeños en rojo en los nudos = 0,13 % del área, ~235 mm² sobre
+  límite; todas las capas con patrón de corte; ~2 h de cálculo por secuencia).
+- Pieza que la red no alcanza / energía plegada: arranque desde aplanado conformal (LSCM) orientado
+  con la dirección de la capa (antes el patrón plano de algunos parches pequeños era un punto).
 - Piezas grandes y planas: red limitada a ~200 000 nodos donde la curvatura lo permite (en class40
   la cizalla pico local baja de 27° a 20°; el área sobre aviso sigue en ~0 %).
 
 ## Pendiente / mejoras posibles
-- Cobertura: menos parches en los nudos (ahora se fuerzan parches pequeños no producibles) y
-  menos tiempo (~25 min por secuencia en la bici).
+- Cobertura: menos parches en los nudos (ahora se fuerzan parches pequeños, algunos de pocos mm²,
+  y 31 quedan en rojo) y menos tiempo (~2 h por secuencia en la bici).
 - Validar con el .wbpz real del usuario y su ficha de tejido; probar el .exe en Windows.
 - Importación en ACP de las tablas de fibra (paso manual, sin probar).
 
